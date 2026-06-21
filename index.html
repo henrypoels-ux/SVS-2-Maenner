@@ -182,6 +182,11 @@
   .ein-in{width:92px;text-align:right;border:1px solid var(--grau-hell);border-radius:9px;
     padding:9px 10px;font-size:15px;font-family:inherit;font-variant-numeric:tabular-nums;}
   .ein-in:focus{outline:none;border-color:var(--gruen-hell);}
+  /* iOS Swipe-to-delete */
+  .swipe-wrap{position:relative;overflow:hidden;}
+  .swipe-del{position:absolute;top:0;right:0;height:100%;width:80px;background:var(--rot);color:#fff;
+    border:0;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .swipe-content{position:relative;background:var(--card);will-change:transform;touch-action:pan-y;}
 </style>
 </head>
 <body>
@@ -340,7 +345,7 @@ function salden(){
   const barIn  = state.bareinnahmen.reduce((s,e)=>s+e.betrag,0);
   const barOut = state.ausgaben.filter(a=>a.quelle==='bar').reduce((s,a)=>s+a.betrag,0);
   const bankIn = state.einnahmen.reduce((s,e)=>s+(e.bank||0),0) + state.transfers.reduce((s,t)=>s+t.betrag,0);
-  const bankOut= state.ausgaben.filter(a=>a.quelle!=='bar').reduce((s,a)=>s+a.betrag,0);
+  const bankOut= state.ausgaben.filter(a=>a.quelle==='bank').reduce((s,a)=>s+a.betrag,0); // quelle 'spieler' (Schiri vom Spieler) belastet die Kasse nicht
   const bar = barIn-barOut, bank = bankIn-bankOut, paypal = paypalSaldo();
   const thekeOffen = state.theke.filter(t=>!t.beglichen).reduce((s,t)=>s+t.betrag,0);
   const strafenOffen = state.strafen.filter(s=>s.typ!=='gutschrift'&&!s.bezahlt).reduce((s,x)=>s+x.betrag,0);
@@ -386,7 +391,25 @@ function render(){
     || (tab==='spieler'&&canEdit('spieler'))
     || (tab==='katalog'&&canEdit('katalog'));
   ab.style.display = showAdd ? 'block':'none';
+  initSwipe();
 }
+
+/* iOS-typisches Wischen nach links zum Löschen */
+let swipeEl=null, swipeStart=0, swipeDx=0, swipeOpen=false;
+function initSwipe(){
+  document.querySelectorAll('.swipe-content').forEach(c=>{
+    c.addEventListener('touchstart',e=>swDown(c,e.touches[0].clientX),{passive:true});
+    c.addEventListener('touchmove', e=>swMove(e.touches[0].clientX),{passive:true});
+    c.addEventListener('touchend', swUp);
+    c.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')swDown(c,e.clientX);});
+  });
+}
+function swDown(c,x){swipeEl=c;swipeStart=x;swipeOpen=c.dataset.open==='1';c.style.transition='none';}
+function swMove(x){if(!swipeEl)return;swipeDx=Math.max(-90,Math.min(0,x-swipeStart+(swipeOpen?-80:0)));swipeEl.style.transform=`translateX(${swipeDx}px)`;}
+function swUp(){if(!swipeEl)return;const c=swipeEl;swipeEl=null;c.style.transition='transform .2s';
+  if(swipeDx<-40){c.style.transform='translateX(-80px)';c.dataset.open='1';}else{c.style.transform='translateX(0)';c.dataset.open='0';}swipeDx=0;}
+window.addEventListener('pointermove',e=>{if(swipeEl&&e.pointerType==='mouse')swMove(e.clientX);});
+window.addEventListener('pointerup',  e=>{if(swipeEl&&e.pointerType==='mouse')swUp();});
 
 function lockBadge(){return `<span class="lock">🔒 nur Kassenwart</span>`;}
 
@@ -482,10 +505,25 @@ function listEinnahmen(){
   ${table('bank')}
   <div class="sec-title" style="display:flex;justify-content:space-between"><span>📱 PayPal</span><span style="text-transform:none;color:var(--text);font-weight:700">${eur(ppSum)}</span></div>
   ${table('paypal')}
+  ${transferBookings()}
   <div class="kpi" style="margin-top:16px;background:linear-gradient(135deg,var(--gruen-hell),var(--gruen))">
     <div class="lbl">PayPal-Saldo (alle Monate)</div><div class="val">${eur(paypalSaldo())}</div></div>
   <button class="btn" style="margin-top:12px" onclick="uebertragPaypal()">PayPal-Saldo an Bank übertragen</button>
-  <p class="note">Trage je Spieler die Einzahlung des gewählten Monats ein (Bank oder PayPal). Mit ‹ › den Monat wechseln. Der Übertrag bucht den kompletten PayPal-Saldo auf die Bank → PayPal-Saldo wird 0.</p>`;
+  <p class="note">Trage je Spieler die Einzahlung des gewählten Monats ein (Bank oder PayPal). Mit ‹ › den Monat wechseln. Übertrag-Buchungen lassen sich nach links wischen und löschen.</p>`;
+}
+
+function transferBookings(){
+  if(!state.transfers.length) return '';
+  const rows=[...state.transfers].sort((a,b)=>b.id-a.id).map(t=>swipeRow(
+    `<div class="row"><div class="ava" style="background:var(--gruen-hell)">↦</div>
+      <div class="r-main"><div class="r-title">Übertrag an Bank</div><div class="r-sub">${monthLabel(t.monat)}</div></div>
+      <div class="r-right"><div class="amount neg">−${eur(t.betrag).replace('-','')}</div></div></div>`,
+    `deleteTransfer(${t.id})`)).join('');
+  return `<div class="sec-title">Überträge PayPal → Bank</div><div class="card">${rows}</div>`;
+}
+function swipeRow(inner, delCall){
+  return `<div class="swipe-wrap"><button class="swipe-del" onclick="${delCall}">🗑️</button>
+    <div class="swipe-content">${inner}</div></div>`;
 }
 
 function listAusgaben(){
@@ -494,10 +532,13 @@ function listAusgaben(){
   const groups = byMonth(state.ausgaben);
   const body = groups.map(g=>{
     const sum = g.items.reduce((a,x)=>a+x.betrag,0);
-    const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(a=>`<li class="row"><div class="r-main"><div class="r-title">${a.kategorie}</div>
-      <div class="r-sub">${dt(a.datum)}</div></div>
+    const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(a=>{
+      const pill = a.quelle==='bar'?['bar','Bar']:a.quelle==='spieler'?['pp','Spieler']:['ueb','Bank'];
+      const sub = a.art==='schiri' ? `🟨 Schiri · bezahlt von ${a.bezahltVon} · ${dt(a.datum)}` : dt(a.datum);
+      return `<li class="row"><div class="r-main"><div class="r-title">${a.kategorie}</div>
+      <div class="r-sub">${sub}</div></div>
       <div class="r-right"><div class="amount neg">−${eur(a.betrag).replace('-','')}</div>
-      <span class="pill ${a.quelle==='bar'?'bar':'ueb'}">${a.quelle==='bar'?'Bar':'Bank'}</span></div></li>`).join('');
+      <span class="pill ${pill[0]}">${pill[1]}</span></div></li>`;}).join('');
     return monthSection(g.label,'−'+eur(sum).replace('-',''),rows);
   }).join('');
   return head+(body||`<div class="empty">Keine Ausgaben</div>`);
@@ -598,8 +639,18 @@ function setEinnahme(pid,feld,v){
 function uebertragPaypal(){
   const s=paypalSaldo();
   if(s<=0){alert('PayPal-Saldo ist 0 € – kein Übertrag nötig.');return;}
-  state.transfers.push({id:newId(),monat:einnahmeMonat,betrag:s}); render();
+  showSheet(`<h3>PayPal → Bank übertragen</h3>
+    <div class="field"><label>Betrag €</label><input id="f_t" type="number" value="${s}"></div>
+    <p class="note">Aktueller PayPal-Saldo: ${eur(s)}. Der Betrag wird von PayPal abgebucht und der Bank gutgeschrieben.</p>
+    <button class="btn" onclick="confirmTransfer()">Übertrag bestätigen</button>
+    <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
+function confirmTransfer(){
+  const b=+document.getElementById('f_t').value;
+  if(b>0) state.transfers.push({id:newId(),monat:einnahmeMonat,betrag:b});
+  closeSheet();render();
+}
+function deleteTransfer(id){ state.transfers=state.transfers.filter(t=>t.id!==id); render(); }
 
 /* ---- Sheet-Mechanik ---- */
 function showSheet(html){
@@ -650,38 +701,75 @@ function saveEintrag(){
 }
 
 function addBar(){
+  const opts='<option value="">— ohne Zuordnung —</option>'+state.players.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   showSheet(`<h3>Bargeld-Bewegung</h3>
-    <div class="field"><label>Art</label><select id="f_art">
+    <div class="field"><label>Art</label><select id="f_art" onchange="toggleBarPlayer()">
       <option value="1">Einnahme (+)</option><option value="-1">Ausgabe (−)</option></select></div>
-    <div class="field"><label>Text</label><input id="f_t" placeholder="z.B. Bareinzahlung Beitrag"></div>
+    <div class="field" id="bar_pl"><label>Spieler (optional – z.B. Beitrag bar)</label><select id="f_p">${opts}</select></div>
+    <div class="field"><label>Text / Zweck</label><input id="f_t" placeholder="z.B. Monatsbeitrag bar"></div>
     <div class="field"><label>Betrag €</label><input id="f_b" type="number" value="10"></div>
     <div class="field"><label>Datum</label><input id="f_d" type="date" value="2026-06-21"></div>
     <button class="btn" onclick="saveBar()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+function toggleBarPlayer(){
+  document.getElementById('bar_pl').style.display=document.getElementById('f_art').value==='1'?'block':'none';
 }
 function saveBar(){
   const art=+document.getElementById('f_art').value;
   const betrag=+document.getElementById('f_b').value;
   const datum=document.getElementById('f_d').value;
   const text=document.getElementById('f_t').value;
-  if(art>0) state.bareinnahmen.push({id:newId(),datum,text:text||'Bareinnahme',betrag});
-  else state.ausgaben.push({id:newId(),datum,kategorie:text||'Barausgabe',betrag,quelle:'bar'});
+  if(art>0){
+    const pid=document.getElementById('f_p').value;
+    const pname=pid?player(+pid).name:'';
+    state.bareinnahmen.push({id:newId(),datum,playerId:pid?+pid:null,text:(pname?pname+' · ':'')+(text||'Bareinnahme'),betrag});
+  } else {
+    state.ausgaben.push({id:newId(),datum,kategorie:text||'Barausgabe',betrag,quelle:'bar'});
+  }
   closeSheet();render();
 }
 
 function addAusgabe(){
+  const opts=state.players.filter(p=>p.status!=='coach').map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   showSheet(`<h3>Ausgabe eintragen</h3>
-    <div class="field"><label>Kategorie / Zweck</label><input id="f_k" placeholder="z.B. Getränke"></div>
+    <div class="field"><label>Art</label><select id="f_art" onchange="toggleSchiri()">
+      <option value="normal">Normale Ausgabe</option>
+      <option value="schiri">Schiedsrichterabrechnung</option></select></div>
+    <div class="field" id="ka_normal"><label>Kategorie / Zweck</label><input id="f_k" placeholder="z.B. Getränke"></div>
     <div class="field"><label>Betrag €</label><input id="f_b" type="number" value="10"></div>
-    <div class="field"><label>Bezahlt aus</label><select id="f_q"><option value="bar">Bargeldkasse</option><option value="bank">Bank / PayPal</option></select></div>
+    <div class="field" id="ka_quelle"><label>Bezahlt aus</label><select id="f_q"><option value="bar">Bargeldkasse</option><option value="bank">Bank / Überweisung</option></select></div>
+    <div class="field" id="ka_schiri" style="display:none"><label>Bezahlt von</label><select id="f_sq">
+      <option value="bar">Barkasse</option>${opts}</select></div>
     <div class="field"><label>Datum</label><input id="f_d" type="date" value="2026-06-21"></div>
+    <p class="note" id="schiri_note" style="display:none">Zahlt ein Spieler den Schiri, bekommt er automatisch eine Gutschrift auf seinen Saldo.</p>
     <button class="btn" onclick="saveAusgabe()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
+function toggleSchiri(){
+  const schiri=document.getElementById('f_art').value==='schiri';
+  document.getElementById('ka_normal').style.display=schiri?'none':'block';
+  document.getElementById('ka_quelle').style.display=schiri?'none':'block';
+  document.getElementById('ka_schiri').style.display=schiri?'block':'none';
+  document.getElementById('schiri_note').style.display=schiri?'block':'none';
+}
 function saveAusgabe(){
-  state.ausgaben.push({id:newId(),kategorie:document.getElementById('f_k').value||'Ausgabe',
-    betrag:+document.getElementById('f_b').value,quelle:document.getElementById('f_q').value,
-    datum:document.getElementById('f_d').value});
+  const art=document.getElementById('f_art').value;
+  const betrag=+document.getElementById('f_b').value;
+  const datum=document.getElementById('f_d').value;
+  if(art==='schiri'){
+    const sq=document.getElementById('f_sq').value;
+    if(sq==='bar'){
+      state.ausgaben.push({id:newId(),kategorie:'Schiedsrichterabrechnung',betrag,quelle:'bar',datum,art:'schiri',bezahltVon:'Barkasse'});
+    } else {
+      const pid=+sq, pname=player(pid).name;
+      state.ausgaben.push({id:newId(),kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahltVon:pname,playerId:pid});
+      state.strafen.push({id:newId(),playerId:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,bezahlt:false,auto:true});
+    }
+  } else {
+    state.ausgaben.push({id:newId(),kategorie:document.getElementById('f_k').value||'Ausgabe',betrag,
+      quelle:document.getElementById('f_q').value,datum});
+  }
   closeSheet();render();
 }
 
@@ -757,7 +845,15 @@ function openPlayer(id){
         <div class="r-sub">Monate bis heute</div></div>
         <div class="amount" id="beitragFaelligVal">${eur(beitragFaellig(p))}</div></li>
     </ul></div>
-    <button class="btn" style="margin-top:14px" onclick="closeSheet();render()">Fertig</button>`);
+    <button class="btn" style="margin-top:14px" onclick="closeSheet();render()">Fertig</button>
+    <button class="btn" style="margin-top:8px;background:var(--rot)" onclick="deleteSpieler(${id})">Spieler löschen</button>`);
+}
+function deleteSpieler(id){
+  if(!confirm('Spieler wirklich löschen? Alle zugehörigen Strafen, Gutschriften und Einnahmen werden entfernt.')) return;
+  state.players=state.players.filter(p=>p.id!==id);
+  state.strafen=state.strafen.filter(s=>s.playerId!==id);
+  state.einnahmen=state.einnahmen.filter(e=>e.playerId!==id);
+  closeSheet();render();
 }
 function toggleMonth(k){const p=player(editPid);if(p.status!=='aktiv')return;p.months[k]=!p.months[k];refreshPlayerSheet();}
 function setStatus(id,v){player(id).status=v;refreshPlayerSheet();}
@@ -779,6 +875,14 @@ function openSettings(){
       <div class="field" style="margin-bottom:0"><label>Mannschaftsfahrt-Beitrag €</label><input id="set_fahrt" type="number" value="${FAHRT}"></div>
     </div>
     <button class="btn" onclick="saveSettings()">Beiträge speichern</button>` : '';
+  const exportBlock = role!=='spieler' ? `
+    <div class="sec-title">Export</div>
+    <div class="card"><ul class="list">
+      <li class="row tap" onclick="openExport()"><div class="ava" style="background:var(--rot)">📄</div>
+        <div class="r-main"><div class="r-title">PDF-Export</div>
+        <div class="r-sub">Übersicht · Strafen · Schiedsrichter</div></div>
+        <div class="r-right"><span class="chev">›</span></div></li>
+    </ul></div>` : '';
   showSheet(`<h3>⚙ Einstellungen</h3>
     <div class="sec-title" style="margin-top:0">Login / Rolle</div>
     <div class="card"><ul class="list">
@@ -789,10 +893,74 @@ function openSettings(){
         <div class="r-right">${role===k?'<span class="pill paid">aktiv</span>':'<span class="chev">›</span>'}</div></li>`).join('')}
     </ul></div>
     <p class="note">Im echten System: Login mit E-Mail &amp; Passwort (Supabase). Hier zum Ausprobieren direkt umschaltbar.</p>
+    ${exportBlock}
     ${beitragBlock}
     <button class="btn sec" style="margin-top:14px" onclick="closeSheet()">Schließen</button>`);
 }
 function loginAs(r){role=r;closeSheet();render();}
+
+/* ---- PDF-Export (Zeitraum wählbar) ---- */
+function openExport(){
+  showSheet(`<h3>📄 PDF-Export</h3>
+    <div class="field"><label>Bericht</label><select id="ex_typ">
+      <option value="uebersicht">Übersicht (Kassenstand & Salden)</option>
+      <option value="strafen">Strafen & Gutschriften</option>
+      <option value="schiri">Schiedsrichterabrechnungen</option></select></div>
+    <div class="field"><label>Von Monat</label><input id="ex_von" type="month" value="2025-08"></div>
+    <div class="field"><label>Bis Monat</label><input id="ex_bis" type="month" value="${HEUTE}"></div>
+    <button class="btn" onclick="doExport()">Als PDF exportieren</button>
+    <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+function doExport(){
+  const typ=document.getElementById('ex_typ').value;
+  const von=document.getElementById('ex_von').value, bis=document.getElementById('ex_bis').value;
+  const inRange=d=>{const k=d.slice(0,7);return k>=von&&k<=bis;};
+  let title='', rows='';
+  if(typ==='strafen'){
+    title='Strafen & Gutschriften';
+    const items=state.strafen.filter(s=>inRange(s.datum)).sort((a,b)=>a.datum.localeCompare(b.datum));
+    rows=`<table><tr><th>Datum</th><th>Spieler</th><th>Grund</th><th>Art</th><th class="r">Betrag</th><th>Status</th></tr>
+      ${items.map(s=>`<tr><td>${s.datum}</td><td>${player(s.playerId)?player(s.playerId).name:'—'}</td><td>${s.grund}</td>
+        <td>${s.typ==='gutschrift'?'Gutschrift':'Strafe'}</td><td class="r">${eur(s.betrag)}</td><td>${s.bezahlt?'erledigt':'offen'}</td></tr>`).join('')}</table>`;
+  } else if(typ==='schiri'){
+    title='Schiedsrichterabrechnungen';
+    const items=state.ausgaben.filter(a=>a.art==='schiri'&&inRange(a.datum)).sort((a,b)=>a.datum.localeCompare(b.datum));
+    const sum=items.reduce((s,a)=>s+a.betrag,0);
+    rows=`<table><tr><th>Datum</th><th class="r">Betrag</th><th>Bezahlt von</th></tr>
+      ${items.map(a=>`<tr><td>${a.datum}</td><td class="r">${eur(a.betrag)}</td><td>${a.bezahltVon}</td></tr>`).join('')}
+      <tr><td><b>Summe</b></td><td class="r"><b>${eur(sum)}</b></td><td></td></tr></table>`;
+  } else {
+    title='Übersicht'; const s=salden();
+    rows=`<table>
+      <tr><td>Kassenstand gesamt</td><td class="r"><b>${eur(s.gesamt)}</b></td></tr>
+      <tr><td>Bargeld</td><td class="r">${eur(s.bar)}</td></tr>
+      <tr><td>Bank</td><td class="r">${eur(s.bank)}</td></tr>
+      <tr><td>PayPal-Saldo</td><td class="r">${eur(s.paypal)}</td></tr>
+      <tr><td>Beiträge Soll (Saison)</td><td class="r">${eur(beitragSollGesamt())}</td></tr>
+      <tr><td>Theke offen</td><td class="r">${eur(s.thekeOffen)}</td></tr>
+      <tr><td>Strafen offen</td><td class="r">${eur(s.strafenOffen)}</td></tr></table>
+      <h3>Saldo je Spieler</h3>
+      <table><tr><th>Spieler</th><th class="r">Saldo</th></tr>
+      ${state.players.filter(p=>p.status==='aktiv').map(p=>`<tr><td>${p.name}</td><td class="r">${eur(playerSaldo(p.id))}</td></tr>`).join('')}</table>`;
+  }
+  const w=window.open('','_blank');
+  if(!w){alert('Bitte Pop-ups erlauben, um den PDF-Export zu öffnen.');return;}
+  w.document.write(`<html><head><meta charset="utf-8"><title>${title}</title><style>
+    body{font-family:-apple-system,Arial,sans-serif;padding:32px;color:#1c1c1e;}
+    h1{color:#006B3F;margin:0;font-size:22px;} h3{color:#006B3F;margin-top:26px;}
+    table{width:100%;border-collapse:collapse;margin-top:8px;}
+    th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #e3e3e3;font-size:13px;}
+    th{background:#006B3F;color:#fff;} td.r,th.r{text-align:right;}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #FFD100;padding-bottom:10px;margin-bottom:6px;}
+    .meta{text-align:right;font-size:12px;color:#555;}
+  </style></head><body>
+    <div class="head"><h1>SV Straelen · 2. Herren</h1>
+      <div class="meta">${title}<br>Zeitraum: ${von} – ${bis}</div></div>
+    ${rows}
+    <p style="margin-top:34px;color:#999;font-size:11px">Erstellt am ${new Date().toLocaleDateString('de-DE')} · Mannschaftskasse 2. Herren</p>
+  </body></html>`);
+  w.document.close(); w.focus(); setTimeout(()=>w.print(),350);
+}
 function saveSettings(){
   const mb=document.getElementById('set_mb'), fa=document.getElementById('set_fahrt');
   if(mb) MB=+mb.value||0; if(fa) FAHRT=+fa.value||0;
