@@ -43,8 +43,9 @@
   }
   .h-top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .h-club{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;opacity:.92;letter-spacing:.2px;}
-  .h-logo{width:26px;height:26px;border-radius:7px;background:var(--gelb);color:var(--gruen);
+  .h-logo{width:30px;height:30px;border-radius:7px;background:#fff;color:var(--gruen);overflow:hidden;
     display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;}
+  .h-logo img{width:100%;height:100%;object-fit:contain;display:block;}
   .h-title{font-size:30px;font-weight:800;letter-spacing:-.5px;margin-top:8px;}
   .h-sub{font-size:13px;opacity:.85;margin-top:2px;}
 
@@ -193,7 +194,7 @@
 <div id="app">
   <header>
     <div class="h-top">
-      <div class="h-club"><div class="h-logo">S</div><span>SV Straelen · 2. Herren</span></div>
+      <div class="h-club"><div class="h-logo"><img src="SVS_Logo_200x200.png" alt="SVS" onerror="this.replaceWith(document.createTextNode('S'))"></div><span>SV Straelen · 2. Herren</span></div>
       <button class="gear" id="gearbtn" onclick="openSettings()" aria-label="Einstellungen">⚙</button>
     </div>
     <div class="h-title" id="pageTitle">Übersicht</div>
@@ -214,7 +215,7 @@
 
 <script>
 /* =================== Beispieldaten =================== */
-const VERSION = '0.5';    // App-Version
+const VERSION = '0.6';    // App-Version
 let MB = 5, MMB = 10;     // Monatsbeitrag € und Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 const HEUTE = '2026-08';  // aktueller Monat (Demo)
 let konto = { inhaber:'Mannschaftskasse 2. Herren', iban:'DE00 0000 0000 0000 0000 00', bank:'Volksbank Niederrhein', paypal:'paypal.me/2herren-straelen' };
@@ -429,20 +430,25 @@ window.addEventListener('pointerup',  e=>{if(swipeEl&&e.pointerType==='mouse')sw
 
 function lockBadge(){return `<span class="lock">🔒 nur Kassenwart</span>`;}
 
+function saldoListe(items,emptyMsg){
+  return `<div class="card"><ul class="list">
+    ${items.length?items.map(o=>`<li class="row"><div class="ava" style="${o.saldo<0?'background:var(--gruen-ios)':''}">${initials(o.p.name)}</div>
+      <div class="r-main"><div class="r-title">${o.p.name}</div><div class="r-sub">${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</div></div>
+      <div class="r-right"><div class="amount ${o.saldo>0?'neg':o.saldo<0?'pos':''}">${o.saldo<0?'+':''}${eur(Math.abs(o.saldo))}</div></div></li>`).join('')
+      : `<div class="empty">${emptyMsg}</div>`}
+  </ul></div>`;
+}
 function viewUebersicht(){
+  const all = state.players.filter(p=>p.status==='aktiv')
+    .map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
+  // Spieler: NUR die Saldenliste aller Spieler, kein Kassenstand
+  if(role==='spieler'){
+    return `<div class="sec-title">Saldo je Spieler</div>${saldoListe(all,'Keine Spieler')}
+    <p class="note">Strafen und Gutschriften werden automatisch verrechnet. Rot = offen, grün = Guthaben.</p>`;
+  }
+  // Kassenwart/Strafenwart: Kassenstand + offene Salden
   const s = salden();
-  const offene = state.players.filter(p=>p.status==='aktiv')
-    .map(p=>({p,saldo:playerSaldo(p.id)})).filter(o=>o.saldo!==0)
-    .sort((a,b)=>b.saldo-a.saldo);
-  const saldoSektion = role==='spieler' ? '' : `
-  <div class="sec-title">Saldo je Spieler (Strafen − Gutschriften)</div>
-  <div class="card"><ul class="list">
-    ${offene.length?offene.map(o=>`<li class="row"><div class="ava" style="${o.saldo<0?'background:var(--gruen-ios)':''}">${initials(o.p.name)}</div>
-      <div class="r-main"><div class="r-title">${o.p.name}</div><div class="r-sub">${o.saldo>0?'offen':'Guthaben'}</div></div>
-      <div class="r-right"><div class="amount ${o.saldo>0?'neg':'pos'}">${o.saldo>0?'':'+'}${eur(Math.abs(o.saldo))}</div></div></li>`).join('')
-      : `<div class="empty">Alles ausgeglichen 🎉</div>`}
-  </ul></div>
-  <p class="note">Strafen und Gutschriften werden automatisch zum Saldo jedes Spielers verrechnet. Rot = offen, grün = Guthaben.</p>`;
+  const offene = all.filter(o=>o.saldo!==0);
   return `
   <div class="kpi"><div class="lbl">Kassenstand gesamt</div>
     <div class="val">${eur(s.gesamt)}</div></div>
@@ -454,7 +460,8 @@ function viewUebersicht(){
     <div class="tile"><div class="t-lbl">🍺 Theke offen</div><div class="t-val neg">${eur(s.thekeOffen)}</div><div class="t-sub">noch zu überweisen</div></div>
     <div class="tile"><div class="t-lbl">⚠️ Offene Salden</div><div class="t-val neg">${eur(s.offeneSalden)}</div><div class="t-sub">Spieler schulden</div></div>
   </div>
-  ${saldoSektion}`;
+  <div class="sec-title">Saldo je Spieler (Strafen − Gutschriften)</div>${saldoListe(offene,'Alles ausgeglichen 🎉')}
+  <p class="note">Strafen und Gutschriften werden automatisch zum Saldo jedes Spielers verrechnet. Rot = offen, grün = Guthaben.</p>`;
 }
 
 function statusLabel(s){return {aktiv:'Aktiv',inaktiv:'Inaktiv',gast:'Gast',coach:'Coach'}[s];}
@@ -591,11 +598,16 @@ function listTheke(){
     const sum = g.items.reduce((a,t)=>a+(t.typ==='ausgleich'?-t.betrag:t.betrag),0);
     const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(t=>{
       const aus=t.typ==='ausgleich';
+      const right=`<div class="amount ${aus?'pos':''}">${aus?'−':''}${eur(t.betrag).replace('-','')}</div>
+        <span class="pill ${aus?'pp':'bar'}">${aus?'Ausgleich':'Kauf'}</span>`;
+      const inner=`<div class="row"><div class="r-main"><div class="r-title">${t.artikel}</div>
+        <div class="r-sub">${aus?'Ausgleich aus: ':'gekauft von: '}${t.wer} · ${dt(t.datum)}</div></div>
+        <div class="r-right">${right}</div></div>`;
+      if(can) return swipeRow(inner,`deleteTheke(${t.id})`);
       return `<li class="row"><div class="r-main"><div class="r-title">${t.artikel}</div>
         <div class="r-sub">${aus?'Ausgleich aus: ':'gekauft von: '}${t.wer} · ${dt(t.datum)}</div></div>
-        <div class="r-right"><div class="amount ${aus?'pos':''}">${aus?'−':''}${eur(t.betrag).replace('-','')}</div>
-        <span class="pill ${aus?'pp':'bar'}">${aus?'Ausgleich':'Kauf'}</span></div></li>`;}).join('');
-    return monthSection(g.label,(sum<0?'−':'')+eur(Math.abs(sum)),rows);
+        <div class="r-right">${right}</div></li>`;}).join('');
+    return monthSection(g.label,(sum<0?'−':'')+eur(Math.abs(sum)),rows,can);
   }).join('');
   return `${restricted?`<div style="margin-bottom:12px">${lockBadge()}</div>`:''}
   <div class="kpi" style="background:linear-gradient(135deg,#b8860b,var(--gelb));color:#5b4500">
@@ -657,6 +669,7 @@ function saveThekeAusgleich(){
   state.theke.push({id:newId(),datum:d,typ:'ausgleich',artikel:'Ausgleich an Theke',wer:q==='bank'?'Bank':'Bargeld',betrag:b});
   closeSheet();render();
 }
+function deleteTheke(id){if(!canEdit('kasse'))return;state.theke=state.theke.filter(t=>t.id!==id);render();}
 
 function onAdd(){
   if(tab==='strafen') addStrafe();
@@ -998,6 +1011,7 @@ function loginAs(r){role=r;closeSheet();render();}
 function openExport(){
   showSheet(`<h3>📄 PDF-Export</h3>
     <div class="field"><label>Bericht</label><select id="ex_typ">
+      <option value="monat">Monatsabrechnung (alle Spieler mit Saldo)</option>
       <option value="spieler">Spielerabrechnung (je Spieler, mit IBAN & PayPal)</option>
       <option value="uebersicht">Übersicht (Kassenstand & Salden)</option>
       <option value="strafen">Strafen & Gutschriften</option>
@@ -1012,7 +1026,14 @@ function doExport(){
   const von=document.getElementById('ex_von').value, bis=document.getElementById('ex_bis').value;
   const inRange=d=>{const k=d.slice(0,7);return k>=von&&k<=bis;};
   let title='', rows='';
-  if(typ==='strafen'){
+  if(typ==='monat'){
+    title='Monatsabrechnung';
+    const aktive=state.players.filter(p=>p.status==='aktiv').map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
+    const gesamt=aktive.reduce((s,o)=>s+o.saldo,0);
+    rows=`<table><tr><th>Spieler</th><th>Status</th><th class="r">Saldo</th></tr>
+      ${aktive.map(o=>`<tr><td>${o.p.name}</td><td>${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</td><td class="r">${eur(o.saldo)}</td></tr>`).join('')}
+      <tr class="sum"><td><b>Summe offene Salden</b></td><td></td><td class="r"><b>${eur(gesamt)}</b></td></tr></table>`;
+  } else if(typ==='strafen'){
     title='Strafen & Gutschriften';
     const items=state.strafen.filter(s=>inRange(s.datum)).sort((a,b)=>a.datum.localeCompare(b.datum));
     rows=`<table><tr><th>Datum</th><th>Spieler</th><th>Grund</th><th>Art</th><th class="r">Betrag</th></tr>
