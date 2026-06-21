@@ -234,7 +234,6 @@
   </header>
 
   <div id="rolebanner"></div>
-  <div class="testbanner">Testphase: Daten kommen live aus der Datenbank – Änderungen werden noch nicht gespeichert.</div>
 
   <main id="view"></main>
 
@@ -254,8 +253,15 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 let currentUser = null;   // angemeldeter Spieler (Datensatz aus players)
 
+/* ---- Datenbank-Hilfen (Schreiben) ---- */
+async function dbInsert(table,row){const{data,error}=await sb.from(table).insert(row).select().single();if(error){alert('Speichern fehlgeschlagen: '+error.message);throw error;}return data;}
+async function dbInsertMany(table,rows){const{data,error}=await sb.from(table).insert(rows).select();if(error){alert('Speichern fehlgeschlagen: '+error.message);throw error;}return data;}
+async function dbUpdate(table,id,patch){const{error}=await sb.from(table).update(patch).eq('id',id);if(error){alert('Aktualisieren fehlgeschlagen: '+error.message);throw error;}}
+async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq('id',id);if(error){alert('Löschen fehlgeschlagen: '+error.message);throw error;}}
+function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
+
 /* =================== Beispieldaten =================== */
-const VERSION = '1.0';    // App-Version (Supabase-Anbindung)
+const VERSION = '1.1';    // App-Version (Supabase: Login, Lesen & Schreiben)
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
@@ -448,8 +454,10 @@ function render(){
   if(role==='kassenwart') rb.innerHTML=`<div class="rolebanner kw">🔓 Eingeloggt als <b>Kassenwart</b> · alle Bearbeitungsrechte aktiv</div>`;
   else if(role==='strafenwart') rb.innerHTML=`<div class="rolebanner sw">🔓 Eingeloggt als <b>Strafenwart</b> · darf Strafen &amp; Gutschriften eintragen</div>`;
   else rb.innerHTML='';
-  // Tab Bar
-  document.getElementById('tabbar').innerHTML = TABS.map(t=>
+  // Tab Bar (Kasse ist für Spieler ausgeblendet)
+  const sichtbareTabs = TABS.filter(t=> !(t.id==='kasse' && role==='spieler'));
+  if(role==='spieler' && tab==='kasse') tab='uebersicht';
+  document.getElementById('tabbar').innerHTML = sichtbareTabs.map(t=>
     `<button class="${tab===t.id?'active':''}" onclick="setTab('${t.id}')">${t.icon()}<span>${t.label}</span></button>`).join('');
   // Titel
   document.getElementById('pageTitle').textContent = TITLES[tab][0];
@@ -718,7 +726,7 @@ function viewKatalog(){
 function setRole(r){role=r;render();}
 function setTab(t){tab=t;render();window.scrollTo(0,0);}
 function setSub(s){kasseSub=s;render();}
-function deleteStrafe(id){if(!canEdit('strafen'))return;state.strafen=state.strafen.filter(s=>s.id!==id);render();}
+async function deleteStrafe(id){if(!canEdit('strafen'))return;try{await dbDelete('strafen',id);state.strafen=state.strafen.filter(s=>s.id!==id);render();}catch(e){}}
 function openThekeAusgleich(){
   const saldo=thekeSaldo();
   showSheet(`<h3>Theke-Saldo ausgleichen</h3>
@@ -730,22 +738,32 @@ function openThekeAusgleich(){
     <button class="btn" onclick="saveThekeAusgleich()">Ausgleichen</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
-function saveThekeAusgleich(){
+async function saveThekeAusgleich(){
   const b=+document.getElementById('ta_b').value, q=document.getElementById('ta_q').value, d=document.getElementById('ta_d').value;
   if(b<=0){alert('Betrag muss größer 0 sein.');return;}
-  state.ausgaben.push({id:newId(),kategorie:'Ausgleich Theke',betrag:b,quelle:q,datum:d});
-  state.theke.push({id:newId(),datum:d,typ:'ausgleich',artikel:'Ausgleich an Theke',wer:q==='bank'?'Bank':'Bargeld',betrag:b});
-  closeSheet();render();
+  try{
+    const a=await dbInsert('ausgaben',{kategorie:'Ausgleich Theke',betrag:b,quelle:q,datum:d});
+    state.ausgaben.push({id:a.id,kategorie:a.kategorie,betrag:Number(a.betrag),quelle:a.quelle,datum:a.datum});
+    const t=await dbInsert('theke',{datum:d,typ:'ausgleich',artikel:'Ausgleich an Theke',wer:q==='bank'?'Bank':'Bargeld',betrag:b});
+    state.theke.push({id:t.id,datum:t.datum,typ:'ausgleich',artikel:t.artikel,wer:t.wer,betrag:Number(t.betrag)});
+    closeSheet();render();
+  }catch(e){}
 }
-function deleteTheke(id){if(!canEdit('kasse'))return;state.theke=state.theke.filter(t=>t.id!==id);render();}
-function deleteAusgabe(id){if(!canEdit('kasse'))return;
-  state.ausgaben=state.ausgaben.filter(a=>a.id!==id);
-  state.strafen=state.strafen.filter(s=>s.refAusgabe!==id); // ggf. automatische Schiri-Gutschrift mit entfernen
-  render();}
-function deleteKassenbuch(src,id){if(!canEdit('kasse'))return;
-  if(src==='in') state.bareinnahmen=state.bareinnahmen.filter(e=>e.id!==id);
-  else state.ausgaben=state.ausgaben.filter(a=>a.id!==id);
-  render();}
+async function deleteTheke(id){if(!canEdit('kasse'))return;try{await dbDelete('theke',id);state.theke=state.theke.filter(t=>t.id!==id);render();}catch(e){}}
+async function deleteAusgabe(id){if(!canEdit('kasse'))return;
+  try{
+    await sb.from('strafen').delete().eq('ref_ausgabe',id);  // ggf. automatische Schiri-Gutschrift mit entfernen
+    await dbDelete('ausgaben',id);
+    state.ausgaben=state.ausgaben.filter(a=>a.id!==id);
+    state.strafen=state.strafen.filter(s=>s.refAusgabe!==id);
+    render();
+  }catch(e){}}
+async function deleteKassenbuch(src,id){if(!canEdit('kasse'))return;
+  try{
+    if(src==='in'){ await dbDelete('bareinnahmen',id); state.bareinnahmen=state.bareinnahmen.filter(e=>e.id!==id); }
+    else { await dbDelete('ausgaben',id); state.ausgaben=state.ausgaben.filter(a=>a.id!==id); }
+    render();
+  }catch(e){}}
 
 function onAdd(){
   if(tab==='strafen') addStrafe();
@@ -760,10 +778,17 @@ function shiftMonat(d){
   if(mo<1){mo=12;y--;} if(mo>12){mo=1;y++;}
   einnahmeMonat=`${y}-${String(mo).padStart(2,'0')}`; render();
 }
-function setEinnahme(pid,feld,v){
+async function setEinnahme(pid,feld,v){
   let e=state.einnahmen.find(x=>x.playerId===pid&&x.monat===einnahmeMonat);
-  if(!e){e={id:newId(),playerId:pid,monat:einnahmeMonat,bank:0,paypal:0};state.einnahmen.push(e);}
-  e[feld]=+v||0; render();
+  if(!e){e={id:null,playerId:pid,monat:einnahmeMonat,bank:0,paypal:0};state.einnahmen.push(e);}
+  e[feld]=+v||0;
+  try{
+    const {data,error}=await sb.from('einnahmen')
+      .upsert({player_id:pid,monat:einnahmeMonat,bank:e.bank,paypal:e.paypal},{onConflict:'player_id,monat'})
+      .select().single();
+    if(error)throw error;
+    e.id=data.id; render();
+  }catch(err){alert('Speichern fehlgeschlagen: '+err.message);}
 }
 function uebertragPaypal(){
   const s=paypalSaldo();
@@ -774,12 +799,12 @@ function uebertragPaypal(){
     <button class="btn" onclick="confirmTransfer()">Übertrag bestätigen</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
-function confirmTransfer(){
+async function confirmTransfer(){
   const b=+document.getElementById('f_t').value;
-  if(b>0) state.transfers.push({id:newId(),monat:einnahmeMonat,betrag:b});
+  if(b>0){ try{ const r=await dbInsert('transfers',{monat:einnahmeMonat,betrag:b}); state.transfers.push({id:r.id,monat:r.monat,betrag:Number(r.betrag)});}catch(e){return;} }
   closeSheet();render();
 }
-function deleteTransfer(id){ state.transfers=state.transfers.filter(t=>t.id!==id); render(); }
+async function deleteTransfer(id){ try{await dbDelete('transfers',id);state.transfers=state.transfers.filter(t=>t.id!==id);render();}catch(e){} }
 
 /* ---- Sheet-Mechanik ---- */
 function showSheet(html){
@@ -873,7 +898,7 @@ function renderSammelList(){
 }
 function toggleSammel(id){sammelSel[id]=!sammelSel[id];const c=document.getElementById('sa_chip_'+id);
   if(c){c.className='pill '+(sammelSel[id]?'paid':'grey');c.textContent=sammelSel[id]?'✓ ausgewählt':'+ wählen';}}
-function saveSammel(){
+async function saveSammel(){
   const ziel=document.getElementById('sa_ziel').value;
   const grund=document.getElementById('sa_grund').value||'Sammelstrafe';
   const betrag=+document.getElementById('sa_b').value, datum=document.getElementById('sa_d').value;
@@ -882,17 +907,23 @@ function saveSammel(){
   else if(ziel==='coaches') targets=state.players.filter(p=>p.status==='coach');
   else targets=state.players.filter(p=>sammelSel[p.id]);
   if(!targets.length){alert('Keine Spieler ausgewählt.');return;}
-  targets.forEach(p=>state.strafen.push({id:newId(),playerId:p.id,typ:'strafe',grund,betrag,datum}));
-  closeSheet();render();
+  try{
+    const rows=await dbInsertMany('strafen', targets.map(p=>({player_id:p.id,typ:'strafe',grund,betrag,datum})));
+    (rows||[]).forEach(r=>state.strafen.push({id:r.id,playerId:r.player_id,typ:'strafe',grund:r.grund,betrag:Number(r.betrag),datum:r.datum}));
+    closeSheet();render();
+  }catch(e){}
 }
-function saveEintrag(){
+async function saveEintrag(){
   const pid=+document.getElementById('f_p').value;
   let grund;
   if(entryTyp==='strafe') grund=document.getElementById('f_g').selectedOptions[0].textContent.replace(/ \(.*\)/,'');
   else grund=document.getElementById('f_gt').value||'Gutschrift';
-  state.strafen.push({id:newId(),playerId:pid,typ:entryTyp,grund,betrag:+document.getElementById('f_b').value,
-    datum:document.getElementById('f_d').value});
-  closeSheet();render();
+  const betrag=+document.getElementById('f_b').value, datum=document.getElementById('f_d').value;
+  try{
+    const r=await dbInsert('strafen',{player_id:pid,typ:entryTyp,grund,betrag,datum});
+    state.strafen.push({id:r.id,playerId:pid,typ:entryTyp,grund,betrag:Number(r.betrag),datum:r.datum});
+    closeSheet();render();
+  }catch(e){}
 }
 
 function addBar(){
@@ -910,19 +941,24 @@ function addBar(){
 function toggleBarPlayer(){
   document.getElementById('bar_pl').style.display=document.getElementById('f_art').value==='1'?'block':'none';
 }
-function saveBar(){
+async function saveBar(){
   const art=+document.getElementById('f_art').value;
   const betrag=+document.getElementById('f_b').value;
   const datum=document.getElementById('f_d').value;
   const text=document.getElementById('f_t').value;
-  if(art>0){
-    const pid=document.getElementById('f_p').value;
-    const pname=pid?player(+pid).name:'';
-    state.bareinnahmen.push({id:newId(),datum,playerId:pid?+pid:null,text:(pname?pname+' · ':'')+(text||'Bareinnahme'),betrag});
-  } else {
-    state.ausgaben.push({id:newId(),datum,kategorie:text||'Barausgabe',betrag,quelle:'bar'});
-  }
-  closeSheet();render();
+  try{
+    if(art>0){
+      const pid=document.getElementById('f_p').value;
+      const pname=pid?player(+pid).name:'';
+      const txt=(pname?pname+' · ':'')+(text||'Bareinnahme');
+      const r=await dbInsert('bareinnahmen',{datum,player_id:pid?+pid:null,text:txt,betrag});
+      state.bareinnahmen.push({id:r.id,datum:r.datum,playerId:r.player_id||null,text:r.text,betrag:Number(r.betrag)});
+    } else {
+      const r=await dbInsert('ausgaben',{datum,kategorie:text||'Barausgabe',betrag,quelle:'bar'});
+      state.ausgaben.push({id:r.id,datum:r.datum,kategorie:r.kategorie,betrag:Number(r.betrag),quelle:'bar'});
+    }
+    closeSheet();render();
+  }catch(e){}
 }
 
 function addAusgabe(){
@@ -948,24 +984,29 @@ function toggleSchiri(){
   document.getElementById('ka_schiri').style.display=schiri?'block':'none';
   document.getElementById('schiri_note').style.display=schiri?'block':'none';
 }
-function saveAusgabe(){
+async function saveAusgabe(){
   const art=document.getElementById('f_art').value;
   const betrag=+document.getElementById('f_b').value;
   const datum=document.getElementById('f_d').value;
-  if(art==='schiri'){
-    const sq=document.getElementById('f_sq').value;
-    if(sq==='bar'){
-      state.ausgaben.push({id:newId(),kategorie:'Schiedsrichterabrechnung',betrag,quelle:'bar',datum,art:'schiri',bezahltVon:'Barkasse'});
+  try{
+    if(art==='schiri'){
+      const sq=document.getElementById('f_sq').value;
+      if(sq==='bar'){
+        const r=await dbInsert('ausgaben',{kategorie:'Schiedsrichterabrechnung',betrag,quelle:'bar',datum,art:'schiri',bezahlt_von:'Barkasse'});
+        state.ausgaben.push({id:r.id,kategorie:r.kategorie,betrag:Number(r.betrag),quelle:'bar',datum:r.datum,art:'schiri',bezahltVon:'Barkasse'});
+      } else {
+        const pid=+sq, pname=player(pid).name;
+        const a=await dbInsert('ausgaben',{kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahlt_von:pname,player_id:pid});
+        state.ausgaben.push({id:a.id,kategorie:a.kategorie,betrag:Number(a.betrag),quelle:'spieler',datum:a.datum,art:'schiri',bezahltVon:pname,playerId:pid});
+        const g=await dbInsert('strafen',{player_id:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,ref_ausgabe:a.id});
+        state.strafen.push({id:g.id,playerId:pid,typ:'gutschrift',grund:g.grund,betrag:Number(g.betrag),datum:g.datum,refAusgabe:a.id});
+      }
     } else {
-      const pid=+sq, pname=player(pid).name, aid=newId();
-      state.ausgaben.push({id:aid,kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahltVon:pname,playerId:pid});
-      state.strafen.push({id:newId(),playerId:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,auto:true,refAusgabe:aid});
+      const r=await dbInsert('ausgaben',{kategorie:document.getElementById('f_k').value||'Ausgabe',betrag,quelle:document.getElementById('f_q').value,datum});
+      state.ausgaben.push({id:r.id,kategorie:r.kategorie,betrag:Number(r.betrag),quelle:r.quelle,datum:r.datum});
     }
-  } else {
-    state.ausgaben.push({id:newId(),kategorie:document.getElementById('f_k').value||'Ausgabe',betrag,
-      quelle:document.getElementById('f_q').value,datum});
-  }
-  closeSheet();render();
+    closeSheet();render();
+  }catch(e){}
 }
 
 function addTheke(){
@@ -978,11 +1019,13 @@ function addTheke(){
     <button class="btn" onclick="saveTheke()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
-function saveTheke(){
-  state.theke.push({id:newId(),artikel:document.getElementById('f_a').value||'Theke',
-    wer:document.getElementById('f_w').value,betrag:+document.getElementById('f_b').value,
-    datum:document.getElementById('f_d').value,typ:'kauf'});
-  closeSheet();render();
+async function saveTheke(){
+  const row={artikel:document.getElementById('f_a').value||'Theke',wer:document.getElementById('f_w').value,
+    betrag:+document.getElementById('f_b').value,datum:document.getElementById('f_d').value,typ:'kauf'};
+  try{ const r=await dbInsert('theke',row);
+    state.theke.push({id:r.id,artikel:r.artikel,wer:r.wer,betrag:Number(r.betrag),datum:r.datum,typ:'kauf'});
+    closeSheet();render();
+  }catch(e){}
 }
 
 function addKatalog(){
@@ -992,17 +1035,22 @@ function addKatalog(){
     <button class="btn" onclick="saveKatalog()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
-function saveKatalog(){
-  state.katalog.push({id:newId(),name:document.getElementById('f_n').value||'Strafe',betrag:+document.getElementById('f_b').value});
-  closeSheet();render();
+async function saveKatalog(){
+  const row={name:document.getElementById('f_n').value||'Strafe',betrag:+document.getElementById('f_b').value,sort:state.katalog.length+1};
+  try{ const r=await dbInsert('katalog',row); state.katalog.push({id:r.id,name:r.name,betrag:Number(r.betrag),hinweis:r.hinweis}); closeSheet();render(); }catch(e){}
 }
 function openKatalog(id){
   const k=state.katalog.find(x=>x.id===id);
   showSheet(`<h3>Katalog bearbeiten</h3>
     <div class="field"><label>Bezeichnung</label><input id="f_n" value="${k.name}"></div>
     <div class="field"><label>Betrag €</label><input id="f_b" type="number" value="${k.betrag}"></div>
-    <button class="btn" onclick="(function(){k=state.katalog.find(x=>x.id===${id});k.name=document.getElementById('f_n').value;k.betrag=+document.getElementById('f_b').value;closeSheet();render();})()">Speichern</button>
+    <button class="btn" onclick="saveKatalogEdit(${id})">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+async function saveKatalogEdit(id){
+  const k=state.katalog.find(x=>x.id===id);
+  const name=document.getElementById('f_n').value, betrag=+document.getElementById('f_b').value;
+  try{ await dbUpdate('katalog',id,{name,betrag}); k.name=name; k.betrag=betrag; closeSheet();render(); }catch(e){}
 }
 
 function addSpieler(){
@@ -1014,11 +1062,15 @@ function addSpieler(){
     <button class="btn" onclick="saveSpieler()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
-function saveSpieler(){
+async function saveSpieler(){
   const st=document.getElementById('f_s').value;
-  state.players.push({id:newId(),name:document.getElementById('f_n').value||'Neuer Spieler',status:st,
-    art:'beides',months:monthsAll(st==='aktiv'),offen:0});
-  closeSheet();render();
+  const name=document.getElementById('f_n').value||'Neuer Spieler';
+  const login=translit(name), email=login+'@svstraelen-2herren.de';
+  try{
+    const r=await dbInsert('players',{name,login,email,status:st,role:'spieler',art:'beides',months:{},initial_password:'Saison2026-27'});
+    state.players.push(mapPlayer(r));
+    closeSheet();render();
+  }catch(e){}
 }
 
 /* ---- Spielerdetail + Monatsbeitrag-Checkliste ---- */
@@ -1045,16 +1097,19 @@ function openPlayer(id){
     <button class="btn" style="margin-top:14px" onclick="closeSheet();render()">Fertig</button>
     <button class="btn" style="margin-top:8px;background:var(--rot)" onclick="deleteSpieler(${id})">Spieler löschen</button>`);
 }
-function deleteSpieler(id){
+async function deleteSpieler(id){
   if(!confirm('Spieler wirklich löschen? Alle zugehörigen Strafen, Gutschriften und Einnahmen werden entfernt.')) return;
-  state.players=state.players.filter(p=>p.id!==id);
-  state.strafen=state.strafen.filter(s=>s.playerId!==id);
-  state.einnahmen=state.einnahmen.filter(e=>e.playerId!==id);
-  closeSheet();render();
+  try{
+    await dbDelete('players',id);
+    state.players=state.players.filter(p=>p.id!==id);
+    state.strafen=state.strafen.filter(s=>s.playerId!==id);
+    state.einnahmen=state.einnahmen.filter(e=>e.playerId!==id);
+    closeSheet();render();
+  }catch(e){}
 }
-function toggleMonth(k){const p=player(editPid);if(p.status!=='aktiv')return;p.months[k]=!p.months[k];refreshPlayerSheet();}
-function setStatus(id,v){player(id).status=v;refreshPlayerSheet();}
-function setArt(id,v){player(id).art=v;refreshPlayerSheet();}
+async function toggleMonth(k){const p=player(editPid);if(p.status!=='aktiv')return;p.months[k]=!p.months[k];refreshPlayerSheet();try{await dbUpdate('players',p.id,{months:p.months});}catch(e){}}
+async function setStatus(id,v){const p=player(id);p.status=v;refreshPlayerSheet();try{await dbUpdate('players',id,{status:v});}catch(e){}}
+async function setArt(id,v){const p=player(id);p.art=v;refreshPlayerSheet();try{await dbUpdate('players',id,{art:v});}catch(e){}}
 function refreshPlayerSheet(){
   const p=player(editPid);
   document.getElementById('beitragVal').textContent=eur(beitrag(p));
@@ -1254,7 +1309,7 @@ function doExport(){
   </body></html>`);
   w.document.close(); w.focus(); setTimeout(()=>w.print(),350);
 }
-function saveSettings(){
+async function saveSettings(){
   const g=id=>document.getElementById(id);
   if(g('set_mb')) MB=+g('set_mb').value||0;
   if(g('set_mmb')) MMB=+g('set_mmb').value||0;
@@ -1263,6 +1318,10 @@ function saveSettings(){
   if(g('set_iban')) konto.iban=g('set_iban').value;
   if(g('set_bank')) konto.bank=g('set_bank').value;
   if(g('set_pp')) konto.paypal=g('set_pp').value;
+  try{
+    await dbUpdate('config',1,{monatsbeitrag:MB,mannschaftsbeitrag:MMB,stichtag:HEUTE,
+      konto_inhaber:konto.inhaber,konto_iban:konto.iban,konto_bank:konto.bank,konto_paypal:konto.paypal});
+  }catch(e){}
   closeSheet();render();
 }
 
