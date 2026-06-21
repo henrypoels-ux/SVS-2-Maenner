@@ -44,7 +44,7 @@
   }
   .h-top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .h-club{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;opacity:.92;letter-spacing:.2px;}
-  .h-logo{width:30px;height:30px;border-radius:7px;background:#fff;color:var(--gruen);overflow:hidden;
+  .h-logo{width:30px;height:30px;border-radius:7px;background:transparent;color:var(--gelb);overflow:hidden;
     display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;}
   .h-logo img{width:100%;height:100%;object-fit:contain;display:block;}
   .h-title{font-size:30px;font-weight:800;letter-spacing:-.5px;margin-top:8px;}
@@ -218,9 +218,9 @@
 
 <script>
 /* =================== Beispieldaten =================== */
-const VERSION = '0.7';    // App-Version
+const VERSION = '0.9';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
-const HEUTE = '2026-08';  // aktueller Monat (Demo)
+let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
 const SAISON = [ // Saison 2026/27 – Juli 2026 bis Mai 2027
   ['2026-07','Jul'],['2026-08','Aug'],['2026-09','Sep'],['2026-10','Okt'],['2026-11','Nov'],['2026-12','Dez'],
@@ -257,7 +257,7 @@ let state = {
     {id:5,playerId:3,typ:'strafe',grund:'Unentschuldigt gefehlt',betrag:10,datum:'2026-07-20'},
     {id:6,playerId:4,typ:'gutschrift',grund:'Bälle gekauft (aus Kasse bezahlt)',betrag:25,datum:'2026-08-06'},
     {id:7,playerId:1,typ:'gutschrift',grund:'Auslage Eckfahnen',betrag:12,datum:'2026-07-22'},
-    {id:8,playerId:2,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag:30,datum:'2026-07-19',auto:true},
+    {id:8,playerId:2,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag:30,datum:'2026-07-19',auto:true,refAusgabe:4},
   ],
   // Einnahmen je Spieler & Monat: getrennt Bank und PayPal
   einnahmen:[
@@ -330,10 +330,11 @@ function monthSection(label,sum,inner,raw){
     <span>${label}</span>${sum!=null?`<span style="text-transform:none;font-weight:700;color:var(--text);font-size:14px">${sum}</span>`:''}</div>
     <div class="card">${body}</div>`;}
 
-/* Saldo je Spieler aus Strafen (+) und Gutschriften (−); >0 = schuldet, <0 = Guthaben */
+/* Voller Saldo je Spieler: fällige Beiträge + Strafen − Gutschriften − Einzahlungen
+   (alles bis zum Stichtag HEUTE).  >0 = schuldet (offen), <0 = Guthaben */
 function playerSaldo(id){
-  return state.strafen.filter(x=>x.playerId===id)
-    .reduce((a,x)=>a+(x.typ==='gutschrift'?-x.betrag:x.betrag),0);
+  const p=player(id); if(!p) return 0;
+  return beitragFaellig(p) + strafenNetBis(id, HEUTE) - einzahlungBis(id, HEUTE);
 }
 
 function monatlich(p){ // monatlicher Beitrag je nach Beitragsart
@@ -467,7 +468,7 @@ function viewUebersicht(){
   // Spieler: NUR die Saldenliste aller Spieler, kein Kassenstand
   if(role==='spieler'){
     return `<div class="sec-title">Saldo je Spieler</div>${saldoListe(all,'Keine Spieler')}
-    <p class="note">Strafen und Gutschriften werden automatisch verrechnet. Rot = offen, grün = Guthaben.</p>`;
+    <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben.</p>`;
   }
   // Kassenwart/Strafenwart: Kassenstand + offene Salden
   const s = salden();
@@ -483,8 +484,8 @@ function viewUebersicht(){
     <div class="tile"><div class="t-lbl">🍺 Theke offen</div><div class="t-val neg">${eur(s.thekeOffen)}</div><div class="t-sub">noch zu überweisen</div></div>
     <div class="tile"><div class="t-lbl">⚠️ Offene Salden</div><div class="t-val neg">${eur(s.offeneSalden)}</div><div class="t-sub">Spieler schulden</div></div>
   </div>
-  <div class="sec-title">Saldo je Spieler (Strafen − Gutschriften)</div>${saldoListe(offene,'Alles ausgeglichen 🎉')}
-  <p class="note">Strafen und Gutschriften werden automatisch zum Saldo jedes Spielers verrechnet. Rot = offen, grün = Guthaben.</p>`;
+  <div class="sec-title">Saldo je Spieler (Stichtag ${monthLabel(HEUTE)})</div>${saldoListe(offene,'Alles ausgeglichen 🎉')}
+  <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben. Stichtag in den Einstellungen änderbar.</p>`;
 }
 
 function statusLabel(s){return {aktiv:'Aktiv',inaktiv:'Inaktiv',gast:'Gast',coach:'Coach'}[s];}
@@ -578,39 +579,46 @@ function swipeRow(inner, delCall){
 }
 
 function listAusgaben(){
-  const restricted = !canEdit('kasse');
-  const head = restricted?`<div style="margin-bottom:12px">${lockBadge()}</div>`:'';
+  const can=canEdit('kasse');
+  const head = !can?`<div style="margin-bottom:12px">${lockBadge()}</div>`:'';
   const groups = byMonth(state.ausgaben);
   const body = groups.map(g=>{
     const sum = g.items.reduce((a,x)=>a+x.betrag,0);
     const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(a=>{
       const pill = a.quelle==='bar'?['bar','Bar']:a.quelle==='spieler'?['pp','Spieler']:['ueb','Bank'];
       const sub = a.art==='schiri' ? `🟨 Schiri · bezahlt von ${a.bezahltVon} · ${dt(a.datum)}` : dt(a.datum);
-      return `<li class="row"><div class="r-main"><div class="r-title">${a.kategorie}</div>
-      <div class="r-sub">${sub}</div></div>
-      <div class="r-right"><div class="amount neg">−${eur(a.betrag).replace('-','')}</div>
-      <span class="pill ${pill[0]}">${pill[1]}</span></div></li>`;}).join('');
-    return monthSection(g.label,'−'+eur(sum).replace('-',''),rows);
+      const right=`<div class="amount neg">−${eur(a.betrag).replace('-','')}</div><span class="pill ${pill[0]}">${pill[1]}</span>`;
+      const inner=`<div class="row"><div class="r-main"><div class="r-title">${a.kategorie}</div><div class="r-sub">${sub}</div></div>
+        <div class="r-right">${right}</div></div>`;
+      if(can) return swipeRow(inner,`deleteAusgabe(${a.id})`);
+      return `<li class="row"><div class="r-main"><div class="r-title">${a.kategorie}</div><div class="r-sub">${sub}</div></div>
+        <div class="r-right">${right}</div></li>`;}).join('');
+    return monthSection(g.label,'−'+eur(sum).replace('-',''),rows,can);
   }).join('');
   return head+(body||`<div class="empty">Keine Ausgaben</div>`);
 }
 
 function kassenbuchBar(){
+  const can=canEdit('kasse');
   const moves=[];
-  state.bareinnahmen.forEach(e=>moves.push({datum:e.datum,text:e.text,betrag:e.betrag}));
-  state.ausgaben.filter(a=>a.quelle==='bar').forEach(a=>moves.push({datum:a.datum,text:a.kategorie,betrag:-a.betrag}));
+  state.bareinnahmen.forEach(e=>moves.push({src:'in',id:e.id,datum:e.datum,text:e.text,betrag:e.betrag}));
+  state.ausgaben.filter(a=>a.quelle==='bar').forEach(a=>moves.push({src:'out',id:a.id,datum:a.datum,text:a.kategorie,betrag:-a.betrag}));
   moves.sort((a,b)=>a.datum.localeCompare(b.datum));
   let saldo=0; moves.forEach(m=>{saldo+=m.betrag;m.saldo=saldo;});
   const groups = byMonth(moves);
   const body = groups.map(g=>{
     const sum = g.items.reduce((a,m)=>a+m.betrag,0);
-    const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(m=>`<li class="row"><div class="r-main">
-      <div class="r-title">${m.text}</div><div class="r-sub">${dt(m.datum)}</div></div>
-      <div class="r-right"><div class="amount ${m.betrag<0?'neg':'pos'}">${m.betrag<0?'−':'+'}${eur(Math.abs(m.betrag)).replace('-','')}</div>
-      <div class="r-sub">Saldo ${eur(m.saldo)}</div></div></li>`).join('');
-    return monthSection(g.label,(sum<0?'−':'+')+eur(Math.abs(sum)).replace('-',''),rows);
+    const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(m=>{
+      const inner=`<div class="row"><div class="r-main"><div class="r-title">${m.text}</div><div class="r-sub">${dt(m.datum)}</div></div>
+        <div class="r-right"><div class="amount ${m.betrag<0?'neg':'pos'}">${m.betrag<0?'−':'+'}${eur(Math.abs(m.betrag)).replace('-','')}</div>
+        <div class="r-sub">Saldo ${eur(m.saldo)}</div></div></div>`;
+      if(can) return swipeRow(inner,`deleteKassenbuch('${m.src}',${m.id})`);
+      return `<li class="row"><div class="r-main"><div class="r-title">${m.text}</div><div class="r-sub">${dt(m.datum)}</div></div>
+        <div class="r-right"><div class="amount ${m.betrag<0?'neg':'pos'}">${m.betrag<0?'−':'+'}${eur(Math.abs(m.betrag)).replace('-','')}</div>
+        <div class="r-sub">Saldo ${eur(m.saldo)}</div></div></li>`;}).join('');
+    return monthSection(g.label,(sum<0?'−':'+')+eur(Math.abs(sum)).replace('-',''),rows,can);
   }).join('');
-  return body+`<p class="note">Bargeld-Kassenbuch mit laufendem Saldo, monatlich unterteilt.</p>`;
+  return (body||`<div class="empty">Keine Bargeld-Bewegungen</div>`)+`<p class="note">Bargeld-Kassenbuch mit laufendem Saldo, monatlich unterteilt.${can?' Eintrag nach links wischen zum Löschen.':''}</p>`;
 }
 
 function listTheke(){
@@ -693,6 +701,14 @@ function saveThekeAusgleich(){
   closeSheet();render();
 }
 function deleteTheke(id){if(!canEdit('kasse'))return;state.theke=state.theke.filter(t=>t.id!==id);render();}
+function deleteAusgabe(id){if(!canEdit('kasse'))return;
+  state.ausgaben=state.ausgaben.filter(a=>a.id!==id);
+  state.strafen=state.strafen.filter(s=>s.refAusgabe!==id); // ggf. automatische Schiri-Gutschrift mit entfernen
+  render();}
+function deleteKassenbuch(src,id){if(!canEdit('kasse'))return;
+  if(src==='in') state.bareinnahmen=state.bareinnahmen.filter(e=>e.id!==id);
+  else state.ausgaben=state.ausgaben.filter(a=>a.id!==id);
+  render();}
 
 function onAdd(){
   if(tab==='strafen') addStrafe();
@@ -904,9 +920,9 @@ function saveAusgabe(){
     if(sq==='bar'){
       state.ausgaben.push({id:newId(),kategorie:'Schiedsrichterabrechnung',betrag,quelle:'bar',datum,art:'schiri',bezahltVon:'Barkasse'});
     } else {
-      const pid=+sq, pname=player(pid).name;
-      state.ausgaben.push({id:newId(),kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahltVon:pname,playerId:pid});
-      state.strafen.push({id:newId(),playerId:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,auto:true});
+      const pid=+sq, pname=player(pid).name, aid=newId();
+      state.ausgaben.push({id:aid,kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahltVon:pname,playerId:pid});
+      state.strafen.push({id:newId(),playerId:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,auto:true,refAusgabe:aid});
     }
   } else {
     state.ausgaben.push({id:newId(),kategorie:document.getElementById('f_k').value||'Ausgabe',betrag,
@@ -1019,6 +1035,11 @@ function openSettings(){
       <div class="field"><label>Monatsbeitrag €</label><input id="set_mb" type="number" value="${MB}"></div>
       <div class="field" style="margin-bottom:0"><label>Mannschaftsbeitrag €</label><input id="set_mmb" type="number" value="${MMB}"></div>
     </div>
+    <div class="sec-title">Aktueller Monat (Stichtag)</div>
+    <div class="card" style="padding:14px 16px">
+      <div class="field" style="margin-bottom:0"><label>Beiträge fällig bis</label><input id="set_heute" type="month" value="${HEUTE}"></div>
+    </div>
+    <p class="note">Bis zu diesem Monat fließen die Monatsbeiträge in den Saldo ein. In der echten App automatisch der laufende Monat – hier zum Testen frei wählbar (z. B. Juli = 1. Beitrag fällig, August = 2., usw.).</p>
     <div class="sec-title">Zahlungsdaten (für Abrechnungen)</div>
     <div class="card" style="padding:14px 16px">
       <div class="field"><label>Kontoinhaber</label><input id="set_inh" value="${konto.inhaber}"></div>
@@ -1199,6 +1220,7 @@ function saveSettings(){
   const g=id=>document.getElementById(id);
   if(g('set_mb')) MB=+g('set_mb').value||0;
   if(g('set_mmb')) MMB=+g('set_mmb').value||0;
+  if(g('set_heute')&&g('set_heute').value) HEUTE=g('set_heute').value;
   if(g('set_inh')) konto.inhaber=g('set_inh').value;
   if(g('set_iban')) konto.iban=g('set_iban').value;
   if(g('set_bank')) konto.bank=g('set_bank').value;
