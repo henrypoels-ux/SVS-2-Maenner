@@ -250,7 +250,9 @@
 /* =================== Supabase-Verbindung =================== */
 const SUPABASE_URL = 'https://tihbucyrlmjvsqsognid.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRpaGJ1Y3lybG1qdnNxc29nbmlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwNTE4MDcsImV4cCI6MjA5NzYyNzgwN30.JooWe5ZDSFVsDMk5918_TyvUhBvQlrm2ocfd4AafJFw';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession:true, autoRefreshToken:true, storageKey:'svs-kasse-auth' }
+});
 let currentUser = null;   // angemeldeter Spieler (Datensatz aus players)
 
 /* ---- Datenbank-Hilfen (Schreiben) ---- */
@@ -261,7 +263,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '1.1';    // App-Version (Supabase: Login, Lesen & Schreiben)
+const VERSION = '1.2';    // App-Version (dauerhaft eingeloggt)
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
