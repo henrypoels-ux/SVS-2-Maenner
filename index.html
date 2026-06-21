@@ -6,6 +6,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#006B3F">
+<meta name="apple-mobile-web-app-title" content="Kasse 2. Herren">
+<link rel="apple-touch-icon" href="SVS_Logo_200x200.png">
+<link rel="icon" type="image/png" href="SVS_Logo_200x200.png">
 <title>Mannschaftskasse · 2. Herren Straelen</title>
 <style>
   :root{
@@ -138,8 +141,10 @@
   .overlay.show{opacity:1;pointer-events:auto;}
   .sheet{position:fixed;left:0;right:0;bottom:0;z-index:101;background:var(--bg);
     border-radius:20px 20px 0 0;max-width:480px;margin:0 auto;transform:translateY(100%);
-    transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:90vh;overflow-y:auto;
-    padding:8px 18px calc(24px + var(--safe-bottom));}
+    transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:90vh;overflow-y:auto;overflow-x:hidden;
+    touch-action:pan-y;padding:8px 18px calc(24px + var(--safe-bottom));}
+  .tile.tap{cursor:pointer;}
+  .tile.tap:active{background:#f5f5f7;}
   .sheet.show{transform:translateY(0);}
   .grip-zone{display:flex;justify-content:center;align-items:center;height:30px;cursor:grab;touch-action:none;margin-bottom:6px;}
   .grip-zone:active{cursor:grabbing;}
@@ -207,6 +212,10 @@
   .login-err{color:var(--rot);font-size:13px;font-weight:600;margin-top:10px;min-height:16px;}
   .login-info{color:var(--grau);font-size:12px;margin-top:10px;line-height:1.5;}
   .testbanner{background:#FFF4CC;color:#7a5b00;font-size:11.5px;font-weight:600;padding:7px 16px;text-align:center;}
+  /* Long-Press-Tooltip */
+  #tooltip{position:fixed;z-index:300;display:none;max-width:240px;background:#1c1c1e;color:#fff;
+    font-size:12.5px;line-height:1.4;padding:9px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    pointer-events:none;}
 </style>
 </head>
 <body>
@@ -244,6 +253,7 @@
 
 <div class="overlay" id="overlay" onclick="closeSheet()"></div>
 <div class="sheet" id="sheet"></div>
+<div id="tooltip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -263,9 +273,12 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '1.3';    // App-Version (rollenbasierte Sicherheit)
+const VERSION = '1.7';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
-let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
+function nowMonth(){return new Date().toISOString().slice(0,7);}
+function heuteDatum(){return new Date().toISOString().slice(0,10);}
+function clampSaison(m){const k=SAISON.map(x=>x[0]);return m<k[0]?k[0]:m>k[k.length-1]?k[k.length-1]:m;}
+let HEUTE = nowMonth();   // aktueller Monat – stellt sich automatisch um
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
 const SAISON = [ // Saison 2026/27 – Juli 2026 bis Mai 2027
   ['2026-07','Jul'],['2026-08','Aug'],['2026-09','Sep'],['2026-10','Okt'],['2026-11','Nov'],['2026-12','Dez'],
@@ -335,6 +348,7 @@ let state = {
     {id:3,datum:'2026-07-30',wer:'Kasse',artikel:'Wasser & Apfelschorle',betrag:24,typ:'kauf'},
     {id:4,datum:'2026-07-31',wer:'Bank',artikel:'Ausgleich an Theke',betrag:24,typ:'ausgleich'},
   ],
+  sonstige:[],   // sonstige Einnahmen (ohne Spielerbezug)
 };
 
 function monthsAll(v){const o={};SAISON.forEach(([k])=>o[k]=v);return o;}
@@ -349,13 +363,18 @@ const ROLES = {
 let role = 'kassenwart';
 let tab = 'uebersicht';
 let kasseSub = 'einnahmen';
-let einnahmeMonat = HEUTE;   // aktuell angezeigter Monat in der Einnahmen-Tabelle
+let einnahmeMonat = clampSaison(HEUTE);   // aktuell angezeigter Monat in der Einnahmen-Tabelle
+let einnahmeKonto = 'bank';               // 'bank' | 'paypal' – Umschalter in den Einnahmen
+let beitragAnsicht = 'saison';            // 'saison' = ganze Saison, 'aktuell' = bis Stichtag
+let strafenFilter = 'alle';               // 'alle' | 'meine' – Filter in den Strafen
+let einZeigeInaktiv = false;              // eingeklappte Liste Inaktive & Gäste in den Einnahmen
 
 function canEdit(section){
   if(role==='kassenwart') return true;
   if(role==='strafenwart') return section==='strafen';
   return false;
 }
+function canTheke(){ return role==='kassenwart' || role==='strafenwart'; } // Theke-Käufe anlegen/löschen
 
 /* =================== Helfer =================== */
 const eur = n => (n<0?'-':'') + '€' + Math.abs(n).toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -422,14 +441,18 @@ function beitragBis(p,m){return p.status!=='aktiv'?0:SAISON.filter(([k])=>p.mont
 function monatKurz(m){const [y,mm]=m.split('-');return MONATE[+mm-1].slice(0,3)+' '+y.slice(2);}
 
 function paypalSaldo(){
-  return state.einnahmen.reduce((s,e)=>s+(e.paypal||0),0) - state.transfers.reduce((s,t)=>s+t.betrag,0);
+  return state.einnahmen.reduce((s,e)=>s+(e.paypal||0),0)
+    + state.sonstige.filter(x=>x.quelle==='paypal').reduce((s,x)=>s+x.betrag,0)
+    - state.transfers.reduce((s,t)=>s+t.betrag,0);
 }
 
 /* Kassen-Salden */
 function salden(){
   const barIn  = state.bareinnahmen.reduce((s,e)=>s+e.betrag,0);
   const barOut = state.ausgaben.filter(a=>a.quelle==='bar').reduce((s,a)=>s+a.betrag,0);
-  const bankIn = state.einnahmen.reduce((s,e)=>s+(e.bank||0),0) + state.transfers.reduce((s,t)=>s+t.betrag,0);
+  const bankIn = state.einnahmen.reduce((s,e)=>s+(e.bank||0),0)
+    + state.sonstige.filter(x=>x.quelle==='bank').reduce((s,x)=>s+x.betrag,0)
+    + state.transfers.reduce((s,t)=>s+t.betrag,0);
   const bankOut= state.ausgaben.filter(a=>a.quelle==='bank').reduce((s,a)=>s+a.betrag,0); // quelle 'spieler' (Schiri vom Spieler) belastet die Kasse nicht
   const bar = barIn-barOut, bank = bankIn-bankOut, paypal = paypalSaldo();
   const thekeOffen = thekeSaldo();   // Summe Käufe − Ausgleiche
@@ -475,11 +498,13 @@ function render(){
   // Plus-Button
   const ab = document.getElementById('addbtn');
   const showAdd = (tab==='strafen'&&canEdit('strafen'))
-    || (tab==='kasse'&&kasseSub!=='einnahmen'&&canEdit('kasse'))
+    || (tab==='kasse'&&kasseSub==='theke'&&canTheke())
+    || (tab==='kasse'&&(kasseSub==='ausgaben'||kasseSub==='bar')&&canEdit('kasse'))
     || (tab==='spieler'&&canEdit('spieler'))
     || (tab==='katalog'&&canEdit('katalog'));
   ab.style.display = showAdd ? 'block':'none';
   initSwipe();
+  initInfo();
 }
 
 /* iOS-typisches Wischen nach links zum Löschen */
@@ -499,41 +524,97 @@ function swUp(){if(!swipeEl)return;const c=swipeEl;swipeEl=null;c.style.transiti
 window.addEventListener('pointermove',e=>{if(swipeEl&&e.pointerType==='mouse')swMove(e.clientX);});
 window.addEventListener('pointerup',  e=>{if(swipeEl&&e.pointerType==='mouse')swUp();});
 
+/* Long-Press → Info-Tooltip (wann & von wem) */
+function initInfo(){
+  document.querySelectorAll('[data-info]').forEach(el=>{
+    let t=null, sx=0, sy=0;
+    const cancel=()=>{ if(t){clearTimeout(t);t=null;} };
+    const start=(x,y)=>{ sx=x;sy=y;cancel(); t=setTimeout(()=>{ t=null; showTooltip(el.getAttribute('data-info'),x,y); }, 450); };
+    const moved=(x,y)=>{ if(Math.abs(x-sx)>10||Math.abs(y-sy)>10) cancel(); };
+    el.addEventListener('touchstart',e=>start(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+    el.addEventListener('touchmove', e=>moved(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+    el.addEventListener('touchend', cancel);
+    el.addEventListener('mousedown', e=>{ if(e.button===0) start(e.clientX,e.clientY); });
+    el.addEventListener('mousemove', e=>moved(e.clientX,e.clientY));
+    el.addEventListener('mouseup', cancel);
+    el.addEventListener('mouseleave', cancel);
+  });
+}
+function showTooltip(text,x,y){
+  const tt=document.getElementById('tooltip'); if(!tt) return;
+  tt.textContent=text; tt.style.display='block';
+  const w=tt.offsetWidth, h=tt.offsetHeight, vw=window.innerWidth, vh=window.innerHeight;
+  tt.style.left=Math.min(Math.max(8,x-w/2), vw-w-8)+'px';
+  tt.style.top=(y+16+h>vh ? y-h-12 : y+16)+'px';
+  setTimeout(()=>{ document.addEventListener('click',hideTooltip,{once:true,capture:true});
+    document.addEventListener('touchstart',hideTooltip,{once:true,capture:true}); }, 30);
+}
+function hideTooltip(){ const tt=document.getElementById('tooltip'); if(tt) tt.style.display='none'; }
+
 function lockBadge(){return `<span class="lock">🔒 nur Kassenwart</span>`;}
 
 function saldoListe(items,emptyMsg){
+  const me = currentUser ? currentUser.id : null;
+  const sorted = [...items].sort((a,b)=>(a.p.id===me?-1:b.p.id===me?1:0));
   return `<div class="card"><ul class="list">
-    ${items.length?items.map(o=>`<li class="row"><div class="ava" style="${o.saldo<0?'background:var(--gruen-ios)':''}">${initials(o.p.name)}</div>
-      <div class="r-main"><div class="r-title">${o.p.name}</div><div class="r-sub">${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</div></div>
-      <div class="r-right"><div class="amount ${o.saldo>0?'neg':o.saldo<0?'pos':''}">${o.saldo<0?'+':''}${eur(Math.abs(o.saldo))}</div></div></li>`).join('')
+    ${sorted.length?sorted.map(o=>{const own=o.p.id===me;
+      return `<li class="row" style="${own?'background:rgba(255,209,0,.2)':''}">
+      <div class="ava" style="${own?'background:var(--gruen)':o.saldo<0?'background:var(--gruen-ios)':''}">${initials(o.p.name)}</div>
+      <div class="r-main"><div class="r-title">${o.p.name}${own?' <b style="color:var(--gruen)">(du)</b>':''}</div><div class="r-sub">${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</div></div>
+      <div class="r-right"><div class="amount ${o.saldo>0?'neg':o.saldo<0?'pos':''}">${o.saldo<0?'+':''}${eur(Math.abs(o.saldo))}</div></div></li>`;}).join('')
       : `<div class="empty">${emptyMsg}</div>`}
+  </ul></div>`;
+}
+function zahlungCard(){
+  const pp=(konto.paypal||'').trim();
+  const ppLink=/^https?:\/\//i.test(pp)||/paypal\.me/i.test(pp);
+  return `<div class="sec-title">Zahlung an die Kasse</div>
+  <div class="card"><ul class="list">
+    <li class="row tap" onclick="copyIban()"><div class="ava">🏦</div>
+      <div class="r-main"><div class="r-title">Banküberweisung</div><div class="r-sub">${konto.inhaber} · ${konto.iban}</div></div>
+      <div class="r-right"><span class="pill grey" id="ibanCopy">kopieren</span></div></li>
+    <li class="row tap" onclick="openPaypal()"><div class="ava" style="background:#0070ba;color:#fff">PP</div>
+      <div class="r-main"><div class="r-title">PayPal</div><div class="r-sub">${pp} · „Freunde &amp; Familie"</div></div>
+      <div class="r-right"><span class="pill ${ppLink?'pp':'grey'}">${ppLink?'öffnen':'kopieren'}</span></div></li>
   </ul></div>`;
 }
 function viewUebersicht(){
   const all = state.players.filter(p=>p.status==='aktiv')
     .map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
-  // Spieler: NUR die Saldenliste aller Spieler, kein Kassenstand
+  const zahlung = role!=='kassenwart' ? zahlungCard() : '';
+  // Spieler: Zahlungswege + Saldenliste, kein Kassenstand
   if(role==='spieler'){
-    return `<div class="sec-title">Saldo je Spieler</div>${saldoListe(all,'Keine Spieler')}
+    return zahlung + `<div class="sec-title">Saldo je Spieler</div>${saldoListe(all,'Keine Spieler')}
     <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben.</p>`;
   }
   // Kassenwart/Strafenwart: Kassenstand + offene Salden
   const s = salden();
   const offene = all.filter(o=>o.saldo!==0);
-  return `
+  const bSaison = beitragAnsicht==='saison';
+  return zahlung + `
   <div class="kpi"><div class="lbl">Kassenstand gesamt</div>
     <div class="val">${eur(s.gesamt)}</div></div>
   <div class="tiles">
     <div class="tile"><div class="t-lbl">💵 Bargeld</div><div class="t-val">${eur(s.bar)}</div><div class="t-sub">Kassenbuch bar</div></div>
     <div class="tile"><div class="t-lbl">🏦 Bank</div><div class="t-val">${eur(s.bank)}</div><div class="t-sub">Überweisungen</div></div>
     <div class="tile"><div class="t-lbl">📱 PayPal</div><div class="t-val">${eur(s.paypal)}</div><div class="t-sub">PayPal-Saldo</div></div>
-    <div class="tile"><div class="t-lbl">🎯 Beiträge Soll</div><div class="t-val">${eur(beitragSollGesamt())}</div><div class="t-sub">Saison gesamt</div></div>
+    <div class="tile tap" onclick="toggleBeitragAnsicht()"><div class="t-lbl">🎯 Beiträge ${bSaison?'Soll':'fällig'}</div><div class="t-val">${eur(bSaison?beitragSollGesamt():beitragFaelligGesamt())}</div><div class="t-sub">${bSaison?'Saison gesamt · tippen':'bis '+monthLabel(HEUTE)+' · tippen'}</div></div>
     <div class="tile"><div class="t-lbl">🍺 Theke offen</div><div class="t-val neg">${eur(s.thekeOffen)}</div><div class="t-sub">noch zu überweisen</div></div>
     <div class="tile"><div class="t-lbl">⚠️ Offene Salden</div><div class="t-val neg">${eur(s.offeneSalden)}</div><div class="t-sub">Spieler schulden</div></div>
   </div>
   <div class="sec-title">Saldo je Spieler (Stichtag ${monthLabel(HEUTE)})</div>${saldoListe(offene,'Alles ausgeglichen 🎉')}
-  <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben. Stichtag in den Einstellungen änderbar.</p>`;
+  <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben.</p>`;
 }
+function toggleBeitragAnsicht(){ beitragAnsicht = beitragAnsicht==='saison'?'aktuell':'saison'; render(); }
+function beitragFaelligGesamt(){ return state.players.filter(p=>p.status==='aktiv').reduce((s,p)=>s+beitragFaellig(p),0); }
+function copyIban(){ const t=(konto.iban||'').replace(/\s+/g,'');
+  const done=()=>{const e=document.getElementById('ibanCopy');if(e){e.textContent='kopiert ✓';e.className='pill paid';}};
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(done).catch(()=>prompt('IBAN kopieren:',konto.iban)); }
+  else prompt('IBAN kopieren:',konto.iban); }
+function openPaypal(){ let p=(konto.paypal||'').trim(); if(!p)return;
+  if(/^https?:\/\//i.test(p)||/paypal\.me/i.test(p)){ const url=/^https?:\/\//i.test(p)?p:'https://'+p.replace(/^\/+/,''); window.open(url,'_blank'); }
+  else if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(p).then(()=>alert('PayPal-Adresse kopiert: '+p)).catch(()=>prompt('PayPal-Adresse:',p)); }
+  else prompt('PayPal-Adresse:',p); }
 
 function statusLabel(s){return {aktiv:'Aktiv',inaktiv:'Inaktiv',gast:'Gast',coach:'Coach'}[s];}
 
@@ -546,27 +627,34 @@ function row(title,sub,amount,cls,extra=''){
 function viewStrafen(){
   const can = canEdit('strafen');
   const head = (!can&&role==='spieler') ? `<div style="margin-bottom:12px"><span class="lock">🔒 Nur Lesezugriff</span></div>` : '';
-  const groups = byMonth(state.strafen);
-  if(!groups.length) return head+`<div class="empty">Noch keine Einträge</div>`;
+  const filterBtns = currentUser ? `<div class="seg" style="margin-bottom:14px">
+    <button class="${strafenFilter==='alle'?'active':''}" onclick="setStrafenFilter('alle')">Alle</button>
+    <button class="${strafenFilter==='meine'?'active':''}" onclick="setStrafenFilter('meine')">Nur meine</button></div>` : '';
+  let items = state.strafen;
+  if(strafenFilter==='meine' && currentUser) items = items.filter(s=>s.playerId===currentUser.id);
+  const groups = byMonth(items);
+  if(!groups.length) return head+filterBtns+`<div class="empty">Keine Einträge</div>`;
   const body = groups.map(g=>{
     const sum = g.items.reduce((a,x)=>a+(x.typ==='gutschrift'?-x.betrag:x.betrag),0);
     const rows = g.items.sort((a,b)=>b.datum.localeCompare(a.datum)).map(s=>{
       const p=player(s.playerId); const gut=s.typ==='gutschrift';
       const avaStyle=gut?'background:var(--gruen-ios)':'';
+      const info='Eingetragen '+(s.createdAt?new Date(s.createdAt).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—')+' von '+(s.erfasstVon||'unbekannt');
       const right=`<div class="amount ${gut?'pos':''}">${gut?'+':''}${eur(s.betrag).replace('-','')}</div>
         <span class="pill ${gut?'pp':'open'}">${gut?'Gutschrift':'Strafe'}</span>`;
-      const inner=`<div class="row"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
+      const inner=`<div class="row" data-info="${info}"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
         <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${s.grund} · ${dt(s.datum)}</div></div>
         <div class="r-right">${right}</div></div>`;
       if(can) return swipeRow(inner,`deleteStrafe(${s.id})`);
-      return `<li class="row"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
+      return `<li class="row" data-info="${info}"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
         <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${s.grund} · ${dt(s.datum)}</div></div>
         <div class="r-right">${right}</div></li>`;
     }).join('');
     return monthSection(g.label, (sum<0?'+':'')+eur(Math.abs(sum)), rows, can);
   }).join('');
-  return head+body+(can?'<p class="note">Plus-Button öffnet das Eingabefenster – oben zwischen <b>Strafe</b> und <b>Gutschrift</b> umschaltbar. Beides zählt automatisch zum Spieler-Saldo. Einen Eintrag nach links wischen zum Löschen.</p>':'');
+  return head+filterBtns+body+(can?'<p class="note">Plus-Button öffnet das Eingabefenster – oben zwischen <b>Strafe</b> und <b>Gutschrift</b> umschaltbar. Beides zählt automatisch zum Spieler-Saldo. Einen Eintrag nach links wischen zum Löschen.</p>':'');
 }
+function setStrafenFilter(f){ strafenFilter=f; render(); }
 
 function viewKasse(){
   const subs = [['einnahmen','Einnahmen'],['ausgaben','Ausgaben'],['bar','Kassenbuch Bar'],['theke','Theke']];
@@ -580,36 +668,58 @@ function viewKasse(){
 
 function listEinnahmen(){
   if(!canEdit('kasse')) return `<div style="margin-bottom:12px">${lockBadge()}</div>
-    <p class="note">Einnahmen werden monatlich je Spieler in zwei Tabellen (Bank &amp; PayPal) erfasst – Eingabe nur für den Kassenwart.</p>`;
-  const m = einnahmeMonat;
-  const aktive = state.players.filter(p=>p.status==='aktiv');
+    <p class="note">Einnahmen werden monatlich je Spieler erfasst – Eingabe nur für den Kassenwart.</p>`;
+  const m = einnahmeMonat, feld = einnahmeKonto;
+  const aktive = state.players.filter(p=>p.status==='aktiv'||p.status==='coach');
+  const inakt  = state.players.filter(p=>p.status==='inaktiv'||p.status==='gast');
   const getE = pid => state.einnahmen.find(e=>e.playerId===pid&&e.monat===m);
-  const cell = (pid,feld) => {const e=getE(pid);const v=e&&e[feld]?e[feld]:'';
+  const cell = pid => {const e=getE(pid);const v=e&&e[feld]?e[feld]:'';
     return `<input type="number" inputmode="decimal" class="ein-in" value="${v}" placeholder="0,00"
       onchange="setEinnahme(${pid},'${feld}',this.value)">`;};
-  const bankSum = aktive.reduce((s,p)=>{const e=getE(p.id);return s+(e?e.bank||0:0);},0);
-  const ppSum   = aktive.reduce((s,p)=>{const e=getE(p.id);return s+(e?e.paypal||0:0);},0);
-  const table = feld => `<div class="card"><ul class="list">
-    ${aktive.map(p=>`<li class="row"><div class="ava">${initials(p.name)}</div>
-      <div class="r-main"><div class="r-title">${p.name}</div></div>
-      <div class="r-right" style="flex-direction:row;align-items:center;gap:6px">€&nbsp;${cell(p.id,feld)}</div></li>`).join('')}
-  </ul></div>`;
+  const sum = aktive.reduce((s,p)=>{const e=getE(p.id);return s+(e?e[feld]||0:0);},0);
+  const tableRows = aktive.map(p=>`<li class="row"><div class="ava">${initials(p.name)}</div>
+      <div class="r-main"><div class="r-title">${p.name}</div>${p.status==='coach'?'<div class="r-sub">Coach</div>':''}</div>
+      <div class="r-right" style="flex-direction:row;align-items:center;gap:6px">€&nbsp;${cell(p.id)}</div></li>`).join('');
+  const inaktSum = inakt.reduce((s,p)=>{const e=getE(p.id);return s+(e?e[feld]||0:0);},0);
+  const inaktBlock = inakt.length ? `
+    <div class="sec-title" onclick="toggleInaktivEin()" style="display:flex;justify-content:space-between;cursor:pointer">
+      <span>${einZeigeInaktiv?'▾':'▸'} Inaktive &amp; Gäste (${inakt.length})</span>
+      <span style="text-transform:none;color:var(--text);font-weight:700">${eur(inaktSum)}</span></div>
+    ${einZeigeInaktiv?`<div class="card"><ul class="list">${inakt.map(p=>`<li class="row"><div class="ava" style="background:var(--grau)">${initials(p.name)}</div>
+      <div class="r-main"><div class="r-title">${p.name}</div><div class="r-sub">${statusLabel(p.status)}</div></div>
+      <div class="r-right" style="flex-direction:row;align-items:center;gap:6px">€&nbsp;${cell(p.id)}</div></li>`).join('')}</ul></div>`:''}` : '';
+  // Sonstige Einnahmen des gewählten Kontos (alle Monate)
+  const sonst = state.sonstige.filter(x=>x.quelle===feld).sort((a,b)=>b.datum.localeCompare(a.datum));
+  const sonstSum = sonst.reduce((a,x)=>a+x.betrag,0);
+  const sonstRows = sonst.map(x=>swipeRow(
+    `<div class="row"><div class="ava" style="background:var(--gruen-hell)">€</div>
+      <div class="r-main"><div class="r-title">${x.text}</div><div class="r-sub">${dt(x.datum)}</div></div>
+      <div class="r-right"><div class="amount pos">+${eur(x.betrag).replace('-','')}</div></div></div>`,
+    `deleteSonstige(${x.id})`)).join('');
+  const ppExtra = feld==='paypal' ? `
+    ${transferBookings()}
+    <div class="kpi" style="margin-top:16px;background:linear-gradient(135deg,var(--gruen-hell),var(--gruen))">
+      <div class="lbl">PayPal-Saldo (alle Monate)</div><div class="val">${eur(paypalSaldo())}</div></div>
+    <button class="btn" style="margin-top:12px" onclick="uebertragPaypal()">PayPal-Saldo an Bank übertragen</button>` : '';
   return `
+  <div class="seg">
+    <button class="${feld==='bank'?'active':''}" onclick="setEinKonto('bank')">🏦 Bank</button>
+    <button class="${feld==='paypal'?'active':''}" onclick="setEinKonto('paypal')">📱 PayPal</button>
+  </div>
   <div class="mnav">
     <button onclick="shiftMonat(-1)">‹</button>
     <div class="mnav-lbl">${monthLabel(m)}</div>
     <button onclick="shiftMonat(1)">›</button>
   </div>
-  <div class="sec-title" style="display:flex;justify-content:space-between"><span>🏦 Bank – Überweisungen</span><span style="text-transform:none;color:var(--text);font-weight:700">${eur(bankSum)}</span></div>
-  ${table('bank')}
-  <div class="sec-title" style="display:flex;justify-content:space-between"><span>📱 PayPal</span><span style="text-transform:none;color:var(--text);font-weight:700">${eur(ppSum)}</span></div>
-  ${table('paypal')}
-  ${transferBookings()}
-  <div class="kpi" style="margin-top:16px;background:linear-gradient(135deg,var(--gruen-hell),var(--gruen))">
-    <div class="lbl">PayPal-Saldo (alle Monate)</div><div class="val">${eur(paypalSaldo())}</div></div>
-  <button class="btn" style="margin-top:12px" onclick="uebertragPaypal()">PayPal-Saldo an Bank übertragen</button>
-  <p class="note">Trage je Spieler die Einzahlung des gewählten Monats ein (Bank oder PayPal). Mit ‹ › den Monat wechseln. Übertrag-Buchungen lassen sich nach links wischen und löschen.</p>`;
+  <button class="btn sec" style="margin-bottom:14px" onclick="addSonstige()">+ Sonstige Einnahme</button>
+  <div class="sec-title" style="display:flex;justify-content:space-between"><span>${feld==='bank'?'🏦 Bank – je Spieler':'📱 PayPal – je Spieler'}</span><span style="text-transform:none;color:var(--text);font-weight:700">${eur(sum)}</span></div>
+  <div class="card"><ul class="list">${tableRows}</ul></div>
+  ${sonst.length?`<div class="sec-title" style="display:flex;justify-content:space-between"><span>Sonstige Einnahmen (${feld==='bank'?'Bank':'PayPal'})</span><span style="text-transform:none;color:var(--text);font-weight:700">+${eur(sonstSum).replace('-','')}</span></div><div class="card">${sonstRows}</div>`:''}
+  ${ppExtra}
+  ${inaktBlock}
+  <p class="note">Oben Bank/PayPal umschalten, mit ‹ › den Monat wechseln. „Sonstige Einnahme" für Beträge ohne Spielerbezug (z. B. Übertrag Vorsaison, Erstattungen). Coaches stehen bei den aktiven Spielern; Inaktive &amp; Gäste sind unten eingeklappt.</p>`;
 }
+function toggleInaktivEin(){ einZeigeInaktiv=!einZeigeInaktiv; render(); }
 
 function transferBookings(){
   if(!state.transfers.length) return '';
@@ -669,7 +779,8 @@ function kassenbuchBar(){
 }
 
 function listTheke(){
-  const restricted=!canEdit('kasse'); const can=canEdit('kasse');
+  const can=canEdit('kasse');     // Ausgleich + Ausgleich-Posten löschen (nur Kassenwart)
+  const canK=canTheke();          // Käufe anlegen/löschen (Kassenwart + Strafenwart)
   const saldo=thekeSaldo();
   const groups = byMonth(state.theke);
   const body = groups.map(g=>{
@@ -681,18 +792,17 @@ function listTheke(){
       const inner=`<div class="row"><div class="r-main"><div class="r-title">${t.artikel}</div>
         <div class="r-sub">${aus?'Ausgleich aus: ':'gekauft von: '}${t.wer} · ${dt(t.datum)}</div></div>
         <div class="r-right">${right}</div></div>`;
-      if(can) return swipeRow(inner,`deleteTheke(${t.id})`);
-      return `<li class="row"><div class="r-main"><div class="r-title">${t.artikel}</div>
-        <div class="r-sub">${aus?'Ausgleich aus: ':'gekauft von: '}${t.wer} · ${dt(t.datum)}</div></div>
-        <div class="r-right">${right}</div></li>`;}).join('');
-    return monthSection(g.label,(sum<0?'−':'')+eur(Math.abs(sum)),rows,can);
+      const delOk = aus ? can : canK;
+      return delOk ? swipeRow(inner,`deleteTheke(${t.id})`) : inner;
+    }).join('');
+    return monthSection(g.label,(sum<0?'−':'')+eur(Math.abs(sum)),rows,true);
   }).join('');
-  return `${restricted?`<div style="margin-bottom:12px">${lockBadge()}</div>`:''}
+  return `${!canK?`<div style="margin-bottom:12px">${lockBadge()}</div>`:''}
   <div class="kpi" style="background:linear-gradient(135deg,#b8860b,var(--gelb));color:#5b4500">
     <div class="lbl">Offen an die Theke</div><div class="val">${eur(saldo)}</div></div>
   ${can?`<button class="btn" style="margin-top:12px" onclick="openThekeAusgleich()">Theke-Saldo ausgleichen</button>`:''}
   <div style="height:6px"></div>${body||`<div class="empty">Keine Theke-Posten</div>`}
-  <p class="note">Theke-Käufe summieren sich zur offenen Schuld. Mit „Ausgleichen" wird eine Ausgabe (Geld an die Theke) gebucht und der Theke-Saldo entsprechend reduziert.${can?' „+" fügt einen neuen Kauf hinzu.':''}</p>`;
+  <p class="note">Theke-Käufe summieren sich zur offenen Schuld.${can?' Mit „Ausgleichen" wird eine Ausgabe (Geld an die Theke) gebucht und der Saldo reduziert.':''}${canK?' „+" fügt einen neuen Kauf hinzu.':''}</p>`;
 }
 
 function viewSpieler(){
@@ -706,7 +816,7 @@ function viewSpieler(){
       return `<li class="row ${can?'tap':''}" ${can?`onclick="openPlayer(${p.id})"`:''}>
       <div class="ava">${initials(p.name)}</div>
       <div class="r-main"><div class="r-title">${p.name}</div>
-      <div class="r-sub">${st==='aktiv'?'Beitrag '+eur(beitrag(p))+' / Saison':statusLabel(st)}</div></div>
+      <div class="r-sub">${st==='aktiv'?'Beitrag '+eur(beitrag(p))+' / Saison':statusLabel(st)}${role==='kassenwart'?(p.angemeldet?' · ✓ angemeldet':' · ✖ noch nicht'):''}</div></div>
       <div class="r-right">${sal!==0?`<span class="pill ${sal>0?'open':'pp'}">${sal>0?'offen':'Guthaben'} ${eur(Math.abs(sal))}</span>`:''}${can?'<span class="chev">›</span>':''}</div></li>`;
     }).join('')}
     </ul></div>`;
@@ -751,7 +861,13 @@ async function saveThekeAusgleich(){
     closeSheet();render();
   }catch(e){}
 }
-async function deleteTheke(id){if(!canEdit('kasse'))return;try{await dbDelete('theke',id);state.theke=state.theke.filter(t=>t.id!==id);render();}catch(e){}}
+async function deleteTheke(id){if(!canEdit('kasse'))return;try{
+  await sb.from('strafen').delete().eq('ref_theke',id);   // zugehörige Spieler-Strafe mit entfernen
+  await dbDelete('theke',id);
+  state.theke=state.theke.filter(t=>t.id!==id);
+  state.strafen=state.strafen.filter(s=>s.refTheke!==id);
+  render();
+}catch(e){}}
 async function deleteAusgabe(id){if(!canEdit('kasse'))return;
   try{
     await sb.from('strafen').delete().eq('ref_ausgabe',id);  // ggf. automatische Schiri-Gutschrift mit entfernen
@@ -807,6 +923,32 @@ async function confirmTransfer(){
   closeSheet();render();
 }
 async function deleteTransfer(id){ try{await dbDelete('transfers',id);state.transfers=state.transfers.filter(t=>t.id!==id);render();}catch(e){} }
+function setEinKonto(k){ einnahmeKonto=k; render(); }
+function addSonstige(){
+  showSheet(`<h3>Sonstige Einnahme</h3>
+    <div class="field"><label>Zweck</label><input id="so_t" placeholder="z.B. Übertrag Kasse Vorsaison, Schiri-Erstattung"></div>
+    <div class="field"><label>Betrag €</label><input id="so_b" type="number" value="0"></div>
+    <div class="field"><label>Konto</label><select id="so_q">
+      <option value="bank"${einnahmeKonto==='bank'?' selected':''}>Bank / Überweisung</option>
+      <option value="paypal"${einnahmeKonto==='paypal'?' selected':''}>PayPal</option></select></div>
+    <div class="field"><label>Datum</label><input id="so_d" type="date" value="${heuteDatum()}"></div>
+    <button class="btn" onclick="saveSonstige()">Speichern</button>
+    <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+async function saveSonstige(){
+  const text=document.getElementById('so_t').value||'Sonstige Einnahme';
+  const betrag=+document.getElementById('so_b').value;
+  const quelle=document.getElementById('so_q').value;
+  const datum=document.getElementById('so_d').value;
+  if(!betrag){ alert('Bitte einen Betrag eingeben.'); return; }
+  try{
+    const r=await dbInsert('sonstige',{text,betrag,quelle,datum});
+    state.sonstige.push({id:r.id,text:r.text,betrag:Number(r.betrag),quelle:r.quelle,datum:r.datum});
+    einnahmeKonto=quelle;
+    closeSheet();render();
+  }catch(e){}
+}
+async function deleteSonstige(id){ if(!canEdit('kasse'))return; try{await dbDelete('sonstige',id);state.sonstige=state.sonstige.filter(x=>x.id!==id);render();}catch(e){} }
 
 /* ---- Sheet-Mechanik ---- */
 function showSheet(html){
@@ -828,18 +970,18 @@ function closeSheet(){
 /* Popup per Wischen nach unten schließen (am Griff oben) */
 function initSheetDrag(){
   const sh=document.getElementById('sheet'), grip=document.getElementById('grip');
-  if(!grip) return;
-  let sy=0, dy=0, drag=false;
-  const down=y=>{drag=true;sy=y;dy=0;sh.style.transition='none';};
-  const move=y=>{if(!drag)return;dy=Math.max(0,y-sy);sh.style.transform=`translateY(${dy}px)`;};
-  const up=()=>{if(!drag)return;drag=false;sh.style.transition='transform .3s cubic-bezier(.32,.72,0,1)';
-    if(dy>110) closeSheet(); else sh.style.transform='translateY(0)';};
-  grip.addEventListener('touchstart',e=>down(e.touches[0].clientY),{passive:true});
-  grip.addEventListener('touchmove', e=>move(e.touches[0].clientY),{passive:true});
-  grip.addEventListener('touchend', up);
-  grip.addEventListener('pointerdown',e=>{if(e.pointerType!=='mouse')return; down(e.clientY);
-    const mm=ev=>move(ev.clientY), mu=()=>{up();window.removeEventListener('pointermove',mm);window.removeEventListener('pointerup',mu);};
-    window.addEventListener('pointermove',mm); window.addEventListener('pointerup',mu);});
+  if(!sh) return;
+  let sy=0, dy=0, drag=false, top=false;
+  const down=y=>{ drag=true; sy=y; dy=0; top=sh.scrollTop<=0; sh.style.transition='none'; };
+  const move=y=>{ if(!drag)return; dy=y-sy; if(dy>0 && top) sh.style.transform=`translateY(${dy}px)`; };
+  const up=()=>{ if(!drag)return; drag=false; sh.style.transition='transform .3s cubic-bezier(.32,.72,0,1)';
+    if(dy>110 && top) closeSheet(); else sh.style.transform='translateY(0)'; dy=0; };
+  sh.ontouchstart=e=>down(e.touches[0].clientY);
+  sh.ontouchmove=e=>{ const y=e.touches[0].clientY; if(drag && top && (y-sy)>0) e.preventDefault(); move(y); };
+  sh.ontouchend=up;
+  if(grip){ grip.onpointerdown=e=>{ if(e.pointerType!=='mouse')return; down(e.clientY);
+    const mm=ev=>move(ev.clientY), mu=()=>{ up(); window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu); };
+    window.addEventListener('pointermove',mm); window.addEventListener('pointerup',mu); }; }
 }
 
 let entryTyp='strafe';
@@ -910,8 +1052,9 @@ async function saveSammel(){
   else targets=state.players.filter(p=>sammelSel[p.id]);
   if(!targets.length){alert('Keine Spieler ausgewählt.');return;}
   try{
-    const rows=await dbInsertMany('strafen', targets.map(p=>({player_id:p.id,typ:'strafe',grund,betrag,datum})));
-    (rows||[]).forEach(r=>state.strafen.push({id:r.id,playerId:r.player_id,typ:'strafe',grund:r.grund,betrag:Number(r.betrag),datum:r.datum}));
+    const ev=(currentUser&&currentUser.name)||null;
+    const rows=await dbInsertMany('strafen', targets.map(p=>({player_id:p.id,typ:'strafe',grund,betrag,datum,erfasst_von:ev})));
+    (rows||[]).forEach(r=>state.strafen.push({id:r.id,playerId:r.player_id,typ:'strafe',grund:r.grund,betrag:Number(r.betrag),datum:r.datum,createdAt:r.created_at,erfasstVon:r.erfasst_von}));
     closeSheet();render();
   }catch(e){}
 }
@@ -922,8 +1065,8 @@ async function saveEintrag(){
   else grund=document.getElementById('f_gt').value||'Gutschrift';
   const betrag=+document.getElementById('f_b').value, datum=document.getElementById('f_d').value;
   try{
-    const r=await dbInsert('strafen',{player_id:pid,typ:entryTyp,grund,betrag,datum});
-    state.strafen.push({id:r.id,playerId:pid,typ:entryTyp,grund,betrag:Number(r.betrag),datum:r.datum});
+    const r=await dbInsert('strafen',{player_id:pid,typ:entryTyp,grund,betrag,datum,erfasst_von:(currentUser&&currentUser.name)||null});
+    state.strafen.push({id:r.id,playerId:pid,typ:entryTyp,grund,betrag:Number(r.betrag),datum:r.datum,createdAt:r.created_at,erfasstVon:r.erfasst_von});
     closeSheet();render();
   }catch(e){}
 }
@@ -1000,8 +1143,8 @@ async function saveAusgabe(){
         const pid=+sq, pname=player(pid).name;
         const a=await dbInsert('ausgaben',{kategorie:'Schiedsrichterabrechnung',betrag,quelle:'spieler',datum,art:'schiri',bezahlt_von:pname,player_id:pid});
         state.ausgaben.push({id:a.id,kategorie:a.kategorie,betrag:Number(a.betrag),quelle:'spieler',datum:a.datum,art:'schiri',bezahltVon:pname,playerId:pid});
-        const g=await dbInsert('strafen',{player_id:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,ref_ausgabe:a.id});
-        state.strafen.push({id:g.id,playerId:pid,typ:'gutschrift',grund:g.grund,betrag:Number(g.betrag),datum:g.datum,refAusgabe:a.id});
+        const g=await dbInsert('strafen',{player_id:pid,typ:'gutschrift',grund:'Schiedsrichter ausgelegt',betrag,datum,ref_ausgabe:a.id,erfasst_von:(currentUser&&currentUser.name)||null});
+        state.strafen.push({id:g.id,playerId:pid,typ:'gutschrift',grund:g.grund,betrag:Number(g.betrag),datum:g.datum,refAusgabe:a.id,createdAt:g.created_at,erfasstVon:g.erfasst_von});
       }
     } else {
       const r=await dbInsert('ausgaben',{kategorie:document.getElementById('f_k').value||'Ausgabe',betrag,quelle:document.getElementById('f_q').value,datum});
@@ -1012,20 +1155,31 @@ async function saveAusgabe(){
 }
 
 function addTheke(){
-  const opts='<option value="Kasse">Kasse</option>'+state.players.map(p=>`<option value="${p.name}">${p.name}</option>`).join('');
+  const opts='<option value="kasse">Kasse</option>'+state.players.filter(p=>p.status!=='inaktiv').map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   showSheet(`<h3>Theke-Posten</h3>
     <div class="field"><label>Artikel</label><input id="f_a" placeholder="z.B. Bier nach dem Spiel"></div>
     <div class="field"><label>Wer zahlt?</label><select id="f_w">${opts}</select></div>
     <div class="field"><label>Betrag €</label><input id="f_b" type="number" value="10"></div>
-    <div class="field"><label>Datum</label><input id="f_d" type="date" value="2026-06-21"></div>
+    <div class="field"><label>Datum</label><input id="f_d" type="date" value="${heuteDatum()}"></div>
+    <p class="note">Wird ein Spieler gewählt, wird ihm der Betrag automatisch als Strafe auf seinen Saldo gebucht.</p>
     <button class="btn" onclick="saveTheke()">Speichern</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
 }
 async function saveTheke(){
-  const row={artikel:document.getElementById('f_a').value||'Theke',wer:document.getElementById('f_w').value,
-    betrag:+document.getElementById('f_b').value,datum:document.getElementById('f_d').value,typ:'kauf'};
-  try{ const r=await dbInsert('theke',row);
+  const artikel=document.getElementById('f_a').value||'Theke';
+  const wer=document.getElementById('f_w').value;
+  const betrag=+document.getElementById('f_b').value;
+  const datum=document.getElementById('f_d').value;
+  const isPlayer = wer!=='kasse';
+  const pid = isPlayer ? +wer : null;
+  const werLabel = isPlayer ? player(pid).name : 'Kasse';
+  try{
+    const r=await dbInsert('theke',{artikel,wer:werLabel,betrag,datum,typ:'kauf'});
     state.theke.push({id:r.id,artikel:r.artikel,wer:r.wer,betrag:Number(r.betrag),datum:r.datum,typ:'kauf'});
+    if(isPlayer){
+      const g=await dbInsert('strafen',{player_id:pid,typ:'strafe',grund:'Theke: '+artikel,betrag,datum,ref_theke:r.id,erfasst_von:(currentUser&&currentUser.name)||null});
+      state.strafen.push({id:g.id,playerId:pid,typ:'strafe',grund:g.grund,betrag:Number(g.betrag),datum:g.datum,refTheke:r.id,createdAt:g.created_at,erfasstVon:g.erfasst_von});
+    }
     closeSheet();render();
   }catch(e){}
 }
@@ -1087,6 +1241,9 @@ function openPlayer(id){
       <option value="beides" ${p.art==='beides'?'selected':''}>Monats- + Mannschaftsbeitrag (${eur(MB+MMB)}/Monat)</option>
       <option value="monat" ${p.art==='monat'?'selected':''}>nur Monatsbeitrag (${eur(MB)}/Monat)</option>
       <option value="mannschaft" ${p.art==='mannschaft'?'selected':''}>nur Mannschaftsbeitrag (${eur(MMB)}/Monat)</option></select></div>
+    ${p.role!=='kassenwart'?`<div class="field"><label>Berechtigung</label><select id="f_role" onchange="setRoleEdit(${id},this.value)">
+      <option value="spieler" ${p.role==='spieler'?'selected':''}>Spieler (nur Übersicht)</option>
+      <option value="strafenwart" ${p.role==='strafenwart'?'selected':''}>Strafenwart (darf Strafen eintragen)</option></select></div>`:''}
     <div class="field"><label>Monate an/abwählen (zahlbare Monate)</label><div class="months" id="months">${chips}</div></div>
     <div class="card" style="margin-top:6px"><ul class="list">
       <li class="row"><div class="r-main"><div class="r-title">Beitrag Saison (Soll)</div>
@@ -1112,6 +1269,7 @@ async function deleteSpieler(id){
 async function toggleMonth(k){const p=player(editPid);if(p.status!=='aktiv')return;p.months[k]=!p.months[k];refreshPlayerSheet();try{await dbUpdate('players',p.id,{months:p.months});}catch(e){}}
 async function setStatus(id,v){const p=player(id);p.status=v;refreshPlayerSheet();try{await dbUpdate('players',id,{status:v});}catch(e){}}
 async function setArt(id,v){const p=player(id);p.art=v;refreshPlayerSheet();try{await dbUpdate('players',id,{art:v});}catch(e){}}
+async function setRoleEdit(id,v){const p=player(id);p.role=v;try{await dbUpdate('players',id,{role:v});}catch(e){}}
 function refreshPlayerSheet(){
   const p=player(editPid);
   document.getElementById('beitragVal').textContent=eur(beitrag(p));
@@ -1129,11 +1287,7 @@ function openSettings(){
       <div class="field"><label>Monatsbeitrag €</label><input id="set_mb" type="number" value="${MB}"></div>
       <div class="field" style="margin-bottom:0"><label>Mannschaftsbeitrag €</label><input id="set_mmb" type="number" value="${MMB}"></div>
     </div>
-    <div class="sec-title">Aktueller Monat (Stichtag)</div>
-    <div class="card" style="padding:14px 16px">
-      <div class="field" style="margin-bottom:0"><label>Beiträge fällig bis</label><input id="set_heute" type="month" value="${HEUTE}"></div>
-    </div>
-    <p class="note">Bis zu diesem Monat fließen die Monatsbeiträge in den Saldo ein. In der echten App automatisch der laufende Monat – hier zum Testen frei wählbar (z. B. Juli = 1. Beitrag fällig, August = 2., usw.).</p>
+    <p class="note">Der aktuelle Monat (Stichtag für fällige Beiträge) stellt sich automatisch ein: heute ${monthLabel(HEUTE)}.</p>
     <div class="sec-title">Zahlungsdaten (für Abrechnungen)</div>
     <div class="card" style="padding:14px 16px">
       <div class="field"><label>Kontoinhaber</label><input id="set_inh" value="${konto.inhaber}"></div>
@@ -1315,7 +1469,6 @@ async function saveSettings(){
   const g=id=>document.getElementById(id);
   if(g('set_mb')) MB=+g('set_mb').value||0;
   if(g('set_mmb')) MMB=+g('set_mmb').value||0;
-  if(g('set_heute')&&g('set_heute').value) HEUTE=g('set_heute').value;
   if(g('set_inh')) konto.inhaber=g('set_inh').value;
   if(g('set_iban')) konto.iban=g('set_iban').value;
   if(g('set_bank')) konto.bank=g('set_bank').value;
@@ -1338,10 +1491,11 @@ function svg(d){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 /* =================== Login & Daten laden (Supabase) =================== */
 function mapPlayer(r){
   return {id:r.id, name:r.name, login:r.login, email:r.email, status:r.status, role:r.role, art:r.art,
+    angemeldet:!!r.auth_id,
     months:(r.months && Object.keys(r.months).length)?r.months:monthsAll(true)};
 }
 async function loadAll(){
-  const [pl,ka,st,ei,tr,ba,au,th,cf] = await Promise.all([
+  const [pl,ka,st,ei,tr,ba,au,th,cf,so] = await Promise.all([
     sb.from('players').select('*'),
     sb.from('katalog').select('*').order('sort'),
     sb.from('strafen').select('*'),
@@ -1350,18 +1504,21 @@ async function loadAll(){
     sb.from('bareinnahmen').select('*'),
     sb.from('ausgaben').select('*'),
     sb.from('theke').select('*'),
-    sb.from('config').select('*').limit(1).maybeSingle()
+    sb.from('config').select('*').limit(1).maybeSingle(),
+    sb.from('sonstige').select('*')
   ]);
   state.players = (pl.data||[]).map(mapPlayer);
   state.katalog = (ka.data||[]).map(r=>({id:r.id,name:r.name,betrag:Number(r.betrag),hinweis:r.hinweis}));
-  state.strafen = (st.data||[]).map(r=>({id:r.id,playerId:r.player_id,typ:r.typ,grund:r.grund,betrag:Number(r.betrag),datum:r.datum,refAusgabe:r.ref_ausgabe||undefined}));
+  state.strafen = (st.data||[]).map(r=>({id:r.id,playerId:r.player_id,typ:r.typ,grund:r.grund,betrag:Number(r.betrag),datum:r.datum,refAusgabe:r.ref_ausgabe||undefined,refTheke:r.ref_theke||undefined,createdAt:r.created_at,erfasstVon:r.erfasst_von}));
   state.einnahmen = (ei.data||[]).map(r=>({id:r.id,playerId:r.player_id,monat:r.monat,bank:Number(r.bank),paypal:Number(r.paypal)}));
   state.transfers = (tr.data||[]).map(r=>({id:r.id,monat:r.monat,betrag:Number(r.betrag)}));
   state.bareinnahmen = (ba.data||[]).map(r=>({id:r.id,playerId:r.player_id||null,datum:r.datum,text:r.text,betrag:Number(r.betrag)}));
   state.ausgaben = (au.data||[]).map(r=>({id:r.id,kategorie:r.kategorie,betrag:Number(r.betrag),datum:r.datum,quelle:r.quelle,art:r.art||undefined,bezahltVon:r.bezahlt_von||undefined,playerId:r.player_id||undefined}));
   state.theke = (th.data||[]).map(r=>({id:r.id,datum:r.datum,typ:r.typ,artikel:r.artikel,wer:r.wer,betrag:Number(r.betrag)}));
-  if(cf.data){ MB=Number(cf.data.monatsbeitrag); MMB=Number(cf.data.mannschaftsbeitrag); HEUTE=cf.data.stichtag||HEUTE;
+  state.sonstige = (so&&so.data?so.data:[]).map(r=>({id:r.id,datum:r.datum,text:r.text,betrag:Number(r.betrag),quelle:r.quelle}));
+  if(cf.data){ MB=Number(cf.data.monatsbeitrag); MMB=Number(cf.data.mannschaftsbeitrag);
     konto={inhaber:cf.data.konto_inhaber||'',iban:cf.data.konto_iban||'',bank:cf.data.konto_bank||'',paypal:cf.data.konto_paypal||''}; }
+  einnahmeMonat = clampSaison(HEUTE);
 }
 function showLogin(){
   document.getElementById('app').style.display='none';
