@@ -191,10 +191,39 @@
   .swipe-del{position:absolute;top:0;right:0;height:100%;width:80px;background:var(--rot);color:#fff;
     border:0;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .swipe-content{position:relative;background:var(--card);will-change:transform;touch-action:pan-y;}
+  /* Login-Screen */
+  #login{position:fixed;inset:0;z-index:200;background:linear-gradient(160deg,var(--gruen),var(--gruen-hell));
+    display:flex;align-items:center;justify-content:center;padding:24px;}
+  .login-card{background:#fff;border-radius:22px;padding:30px 24px;width:100%;max-width:360px;
+    box-shadow:0 20px 50px rgba(0,0,0,.3);text-align:center;}
+  .login-logo{width:74px;height:74px;margin:0 auto 12px;}
+  .login-logo img{width:100%;height:100%;object-fit:contain;}
+  .login-card h2{font-size:20px;font-weight:800;color:var(--gruen);margin:0 0 18px;line-height:1.25;}
+  .login-card input{width:100%;border:1px solid var(--grau-hell);border-radius:11px;padding:13px 14px;
+    font-size:16px;margin-bottom:10px;font-family:inherit;}
+  .login-card input:focus{outline:none;border-color:var(--gruen-hell);}
+  .login-card button{width:100%;border:0;background:var(--gruen);color:#fff;font-size:16px;font-weight:700;
+    padding:14px;border-radius:12px;cursor:pointer;margin-top:4px;}
+  .login-err{color:var(--rot);font-size:13px;font-weight:600;margin-top:10px;min-height:16px;}
+  .login-info{color:var(--grau);font-size:12px;margin-top:10px;line-height:1.5;}
+  .testbanner{background:#FFF4CC;color:#7a5b00;font-size:11.5px;font-weight:600;padding:7px 16px;text-align:center;}
 </style>
 </head>
 <body>
-<div id="app">
+
+<div id="login">
+  <div class="login-card">
+    <div class="login-logo"><img src="SVS_Logo_200x200.png" alt="SVS" onerror="this.style.display='none'"></div>
+    <h2>Mannschaftskasse<br>2. Herren Straelen</h2>
+    <input id="lg_user" placeholder="Login (vorname.nachname)" autocapitalize="off" autocorrect="off" autocomplete="username">
+    <input id="lg_pw" type="password" placeholder="Passwort" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()" id="lg_btn">Anmelden</button>
+    <div class="login-err" id="lg_err"></div>
+    <div class="login-info">Erstanmeldung mit dem Standardpasswort. Danach unter ⚙ änderbar.</div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
   <header>
     <div class="h-top">
       <div class="h-club"><div class="h-logo"><img src="SVS_Logo_200x200.png" alt="SVS" onerror="this.replaceWith(document.createTextNode('S'))"></div><span>SV Straelen · 2. Herren</span></div>
@@ -205,6 +234,7 @@
   </header>
 
   <div id="rolebanner"></div>
+  <div class="testbanner">Testphase: Daten kommen live aus der Datenbank – Änderungen werden noch nicht gespeichert.</div>
 
   <main id="view"></main>
 
@@ -216,9 +246,16 @@
 <div class="overlay" id="overlay" onclick="closeSheet()"></div>
 <div class="sheet" id="sheet"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/* =================== Supabase-Verbindung =================== */
+const SUPABASE_URL = 'https://tihbucyrlmjvsqsognid.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRpaGJ1Y3lybG1qdnNxc29nbmlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwNTE4MDcsImV4cCI6MjA5NzYyNzgwN30.JooWe5ZDSFVsDMk5918_TyvUhBvQlrm2ocfd4AafJFw';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let currentUser = null;   // angemeldeter Spieler (Datensatz aus players)
+
 /* =================== Beispieldaten =================== */
-const VERSION = '0.9';    // App-Version
+const VERSION = '1.0';    // App-Version (Supabase-Anbindung)
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
@@ -1056,22 +1093,23 @@ function openSettings(){
         <div class="r-sub">Übersicht · Strafen · Schiedsrichter</div></div>
         <div class="r-right"><span class="chev">›</span></div></li>
     </ul></div>` : '';
+  const rolleLabel = {kassenwart:'Kassenwart',strafenwart:'Strafenwart',spieler:'Spieler'}[role]||'Spieler';
   showSheet(`<h3>⚙ Einstellungen</h3>
-    <div class="sec-title" style="margin-top:0">Login / Rolle</div>
+    <div class="sec-title" style="margin-top:0">Angemeldet</div>
     <div class="card"><ul class="list">
-      ${Object.entries(ROLES).map(([k,v])=>`<li class="row tap" onclick="loginAs('${k}')">
-        <div class="ava" style="background:${k==='kassenwart'?'var(--gruen)':k==='strafenwart'?'#b8860b':'var(--grau)'}">${v.label[0]}</div>
-        <div class="r-main"><div class="r-title">${v.label}</div>
-        <div class="r-sub">${k==='kassenwart'?'Vollzugriff – alles bearbeiten':k==='strafenwart'?'Strafen & Gutschriften eintragen':'nur Übersicht (Lesezugriff)'}</div></div>
-        <div class="r-right">${role===k?'<span class="pill paid">aktiv</span>':'<span class="chev">›</span>'}</div></li>`).join('')}
+      <li class="row"><div class="ava">${currentUser?initials(currentUser.name):'?'}</div>
+        <div class="r-main"><div class="r-title">${currentUser?currentUser.name:'—'}</div>
+        <div class="r-sub">Rolle: ${rolleLabel}</div></div></li>
+      <li class="row tap" onclick="openPasswort()"><div class="r-main"><div class="r-title">Passwort ändern</div></div>
+        <div class="r-right"><span class="chev">›</span></div></li>
+      <li class="row tap" onclick="logout()"><div class="r-main"><div class="r-title" style="color:var(--rot)">Abmelden</div></div>
+        <div class="r-right"><span class="chev">›</span></div></li>
     </ul></div>
-    <p class="note">Im echten System: Login mit E-Mail &amp; Passwort (Supabase). Hier zum Ausprobieren direkt umschaltbar.</p>
     ${exportBlock}
     ${beitragBlock}
     <button class="btn sec" style="margin-top:14px" onclick="closeSheet()">Schließen</button>
     <p class="note" style="text-align:center">Mannschaftskasse 2. Herren · Version ${VERSION}</p>`);
 }
-function loginAs(r){role=r;closeSheet();render();}
 
 /* ---- PDF-Export (Zeitraum wählbar) ---- */
 function openExport(){
@@ -1236,7 +1274,100 @@ function iconUsers(){return svg('M9 11a3 3 0 100-6 3 3 0 000 6zM3 20a6 6 0 0112 
 function iconBook(){return svg('M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 5v14');}
 function svg(d){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;}
 
-render();
+/* =================== Login & Daten laden (Supabase) =================== */
+function mapPlayer(r){
+  return {id:r.id, name:r.name, login:r.login, email:r.email, status:r.status, role:r.role, art:r.art,
+    months:(r.months && Object.keys(r.months).length)?r.months:monthsAll(true)};
+}
+async function loadAll(){
+  const [pl,ka,st,ei,tr,ba,au,th,cf] = await Promise.all([
+    sb.from('players').select('*'),
+    sb.from('katalog').select('*').order('sort'),
+    sb.from('strafen').select('*'),
+    sb.from('einnahmen').select('*'),
+    sb.from('transfers').select('*'),
+    sb.from('bareinnahmen').select('*'),
+    sb.from('ausgaben').select('*'),
+    sb.from('theke').select('*'),
+    sb.from('config').select('*').limit(1).maybeSingle()
+  ]);
+  state.players = (pl.data||[]).map(mapPlayer);
+  state.katalog = (ka.data||[]).map(r=>({id:r.id,name:r.name,betrag:Number(r.betrag),hinweis:r.hinweis}));
+  state.strafen = (st.data||[]).map(r=>({id:r.id,playerId:r.player_id,typ:r.typ,grund:r.grund,betrag:Number(r.betrag),datum:r.datum,refAusgabe:r.ref_ausgabe||undefined}));
+  state.einnahmen = (ei.data||[]).map(r=>({id:r.id,playerId:r.player_id,monat:r.monat,bank:Number(r.bank),paypal:Number(r.paypal)}));
+  state.transfers = (tr.data||[]).map(r=>({id:r.id,monat:r.monat,betrag:Number(r.betrag)}));
+  state.bareinnahmen = (ba.data||[]).map(r=>({id:r.id,playerId:r.player_id||null,datum:r.datum,text:r.text,betrag:Number(r.betrag)}));
+  state.ausgaben = (au.data||[]).map(r=>({id:r.id,kategorie:r.kategorie,betrag:Number(r.betrag),datum:r.datum,quelle:r.quelle,art:r.art||undefined,bezahltVon:r.bezahlt_von||undefined,playerId:r.player_id||undefined}));
+  state.theke = (th.data||[]).map(r=>({id:r.id,datum:r.datum,typ:r.typ,artikel:r.artikel,wer:r.wer,betrag:Number(r.betrag)}));
+  if(cf.data){ MB=Number(cf.data.monatsbeitrag); MMB=Number(cf.data.mannschaftsbeitrag); HEUTE=cf.data.stichtag||HEUTE;
+    konto={inhaber:cf.data.konto_inhaber||'',iban:cf.data.konto_iban||'',bank:cf.data.konto_bank||'',paypal:cf.data.konto_paypal||''}; }
+}
+function showLogin(){
+  document.getElementById('app').style.display='none';
+  document.getElementById('login').style.display='flex';
+}
+async function afterLogin(){
+  const {data:{user}} = await sb.auth.getUser();
+  if(!user){ showLogin(); return; }
+  let {data:rows} = await sb.from('players').select('*').eq('auth_id',user.id).limit(1);
+  if(!rows || !rows.length){ await sb.rpc('claim_player'); ({data:rows} = await sb.from('players').select('*').eq('auth_id',user.id).limit(1)); }
+  if(!rows || !rows.length){ ({data:rows} = await sb.from('players').select('*').eq('email',user.email).limit(1)); }
+  currentUser = (rows && rows[0]) ? mapPlayer(rows[0]) : {name:user.email, role:'spieler'};
+  role = currentUser.role || 'spieler';
+  await loadAll();
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').style.display='';
+  tab='uebersicht';
+  render();
+}
+async function doLogin(){
+  const err=document.getElementById('lg_err'); err.textContent='';
+  const btn=document.getElementById('lg_btn');
+  const login=(document.getElementById('lg_user').value||'').trim().toLowerCase();
+  const pw=document.getElementById('lg_pw').value||'';
+  if(!login||!pw){ err.textContent='Bitte Login und Passwort eingeben.'; return; }
+  btn.disabled=true; btn.textContent='Anmelden…';
+  try{
+    const {data:email} = await sb.rpc('get_email',{p_login:login});
+    if(!email){ err.textContent='Login unbekannt.'; return; }
+    let {error:e1} = await sb.auth.signInWithPassword({email, password:pw});
+    if(e1){
+      const {data:initOk} = await sb.rpc('is_initial',{p_login:login, p_pw:pw});
+      if(!initOk){ err.textContent='Passwort falsch.'; return; }
+      const {error:e2} = await sb.auth.signUp({email, password:pw});
+      if(e2){ err.textContent='Erstanmeldung fehlgeschlagen: '+e2.message; return; }
+      const {error:e3} = await sb.auth.signInWithPassword({email, password:pw});
+      if(e3){ err.textContent='Konto erstellt, aber Login fehlgeschlagen. In Supabase bitte „Confirm email" ausschalten.'; return; }
+      await sb.rpc('claim_player');
+    }
+    await afterLogin();
+  }catch(ex){ err.textContent='Fehler: '+(ex.message||ex); }
+  finally{ btn.disabled=false; btn.textContent='Anmelden'; }
+}
+async function logout(){ await sb.auth.signOut(); location.reload(); }
+function openPasswort(){
+  showSheet(`<h3>Passwort ändern</h3>
+    <div class="field"><label>Aktuelles Passwort</label><input id="pw_alt" type="password"></div>
+    <div class="field"><label>Neues Passwort</label><input id="pw_neu" type="password"></div>
+    <div class="field"><label>Neues Passwort wiederholen</label><input id="pw_neu2" type="password"></div>
+    <button class="btn" onclick="savePasswort()">Speichern</button>
+    <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+async function savePasswort(){
+  const alt=val('pw_alt'), neu=val('pw_neu'), neu2=val('pw_neu2');
+  if(!neu||neu.length<6){ alert('Neues Passwort: mindestens 6 Zeichen.'); return; }
+  if(neu!==neu2){ alert('Die neuen Passwörter stimmen nicht überein.'); return; }
+  const {error:e1}=await sb.auth.signInWithPassword({email:currentUser.email, password:alt});
+  if(e1){ alert('Aktuelles Passwort ist falsch.'); return; }
+  const {error:e2}=await sb.auth.updateUser({password:neu});
+  if(e2){ alert('Fehler: '+e2.message); return; }
+  closeSheet(); alert('Passwort geändert.');
+}
+async function boot(){
+  try{ const {data:{session}} = await sb.auth.getSession(); if(session){ await afterLogin(); return; } }catch(e){}
+  showLogin();
+}
+boot();
 </script>
 </body>
 </html>
