@@ -25,14 +25,15 @@
     --safe-bottom:env(safe-area-inset-bottom,0px);
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;padding:0;height:100%;}
+  html,body{margin:0;padding:0;height:100%;overflow-x:hidden;max-width:100%;}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     background:var(--bg);color:var(--text);
     -webkit-font-smoothing:antialiased;
     overscroll-behavior:none;
   }
-  #app{max-width:480px;margin:0 auto;min-height:100%;position:relative;background:var(--bg);}
+  body.noscroll{overflow:hidden;position:fixed;width:100%;}
+  #app{max-width:480px;margin:0 auto;min-height:100%;position:relative;background:var(--bg);overflow-x:hidden;}
 
   /* ---------- Header ---------- */
   header{
@@ -140,7 +141,9 @@
     transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:90vh;overflow-y:auto;
     padding:8px 18px calc(24px + var(--safe-bottom));}
   .sheet.show{transform:translateY(0);}
-  .grip{width:38px;height:5px;background:var(--grau-hell);border-radius:3px;margin:8px auto 14px;}
+  .grip-zone{display:flex;justify-content:center;align-items:center;height:30px;cursor:grab;touch-action:none;margin-bottom:6px;}
+  .grip-zone:active{cursor:grabbing;}
+  .grip-bar{width:42px;height:5px;background:var(--grau-hell);border-radius:3px;}
   .sheet h3{font-size:20px;font-weight:800;margin:0 0 14px;}
   .field{margin-bottom:12px;}
   .field label{display:block;font-size:13px;font-weight:600;color:var(--grau);margin:0 2px 6px;}
@@ -215,10 +218,10 @@
 
 <script>
 /* =================== Beispieldaten =================== */
-const VERSION = '0.6';    // App-Version
-let MB = 5, MMB = 10;     // Monatsbeitrag € und Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
+const VERSION = '0.7';    // App-Version
+let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 const HEUTE = '2026-08';  // aktueller Monat (Demo)
-let konto = { inhaber:'Mannschaftskasse 2. Herren', iban:'DE00 0000 0000 0000 0000 00', bank:'Volksbank Niederrhein', paypal:'paypal.me/2herren-straelen' };
+let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
 const SAISON = [ // Saison 2026/27 – Juli 2026 bis Mai 2027
   ['2026-07','Jul'],['2026-08','Aug'],['2026-09','Sep'],['2026-10','Okt'],['2026-11','Nov'],['2026-12','Dez'],
   ['2027-01','Jan'],['2027-02','Feb'],['2027-03','Mär'],['2027-04','Apr'],['2027-05','Mai']
@@ -351,6 +354,26 @@ function beitragFaellig(p){ // bereits fälliger Beitrag bis zum aktuellen Monat
 function beitragSollGesamt(){return state.players.filter(p=>p.status==='aktiv').reduce((s,p)=>s+beitrag(p),0);}
 function artLabel(a){return {beides:'Monats- + Mannschaftsbeitrag',monat:'nur Monatsbeitrag',mannschaft:'nur Mannschaftsbeitrag'}[a]||'—';}
 function thekeSaldo(){return state.theke.reduce((s,t)=>s+(t.typ==='ausgleich'?-t.betrag:t.betrag),0);}
+
+/* Helfer für die Monatsabrechnung (Spalten je Spieler) */
+function monatsAnteil(p){return (p.status==='aktiv'&&p.art!=='mannschaft')?MB:0;}   // Monatsbeitrag-Spalte
+function mfAnteil(p){return (p.status==='aktiv'&&p.art!=='monat')?MMB:0;}            // MF-Beitrag-Spalte
+function einzahlungMonat(pid,m){
+  let s=0;
+  state.einnahmen.filter(e=>e.playerId===pid&&e.monat===m).forEach(e=>s+=(e.bank||0)+(e.paypal||0));
+  state.bareinnahmen.filter(e=>e.playerId===pid&&e.datum.slice(0,7)===m).forEach(e=>s+=e.betrag);
+  return s;
+}
+function einzahlungBis(pid,m){
+  let s=0;
+  state.einnahmen.filter(e=>e.playerId===pid&&e.monat<=m).forEach(e=>s+=(e.bank||0)+(e.paypal||0));
+  state.bareinnahmen.filter(e=>e.playerId===pid&&e.datum.slice(0,7)<=m).forEach(e=>s+=e.betrag);
+  return s;
+}
+function strafenNetMonat(pid,m){return state.strafen.filter(s=>s.playerId===pid&&s.datum.slice(0,7)===m).reduce((a,x)=>a+(x.typ==='gutschrift'?-x.betrag:x.betrag),0);}
+function strafenNetBis(pid,m){return state.strafen.filter(s=>s.playerId===pid&&s.datum.slice(0,7)<=m).reduce((a,x)=>a+(x.typ==='gutschrift'?-x.betrag:x.betrag),0);}
+function beitragBis(p,m){return p.status!=='aktiv'?0:SAISON.filter(([k])=>p.months[k]&&k<=m).length*monatlich(p);}
+function monatKurz(m){const [y,mm]=m.split('-');return MONATE[+mm-1].slice(0,3)+' '+y.slice(2);}
 
 function paypalSaldo(){
   return state.einnahmen.reduce((s,e)=>s+(e.paypal||0),0) - state.transfers.reduce((s,t)=>s+t.betrag,0);
@@ -708,13 +731,35 @@ function deleteTransfer(id){ state.transfers=state.transfers.filter(t=>t.id!==id
 /* ---- Sheet-Mechanik ---- */
 function showSheet(html){
   const sh=document.getElementById('sheet');
-  sh.innerHTML=`<div class="grip"></div>`+html;
+  sh.style.transform='';
+  sh.innerHTML=`<div class="grip-zone" id="grip"><div class="grip-bar"></div></div>`+html;
   document.getElementById('overlay').classList.add('show');
+  document.body.classList.add('noscroll');
   requestAnimationFrame(()=>sh.classList.add('show'));
+  initSheetDrag();
 }
 function closeSheet(){
-  document.getElementById('sheet').classList.remove('show');
+  const sh=document.getElementById('sheet');
+  sh.classList.remove('show');
+  sh.style.transform='';
   document.getElementById('overlay').classList.remove('show');
+  document.body.classList.remove('noscroll');
+}
+/* Popup per Wischen nach unten schließen (am Griff oben) */
+function initSheetDrag(){
+  const sh=document.getElementById('sheet'), grip=document.getElementById('grip');
+  if(!grip) return;
+  let sy=0, dy=0, drag=false;
+  const down=y=>{drag=true;sy=y;dy=0;sh.style.transition='none';};
+  const move=y=>{if(!drag)return;dy=Math.max(0,y-sy);sh.style.transform=`translateY(${dy}px)`;};
+  const up=()=>{if(!drag)return;drag=false;sh.style.transition='transform .3s cubic-bezier(.32,.72,0,1)';
+    if(dy>110) closeSheet(); else sh.style.transform='translateY(0)';};
+  grip.addEventListener('touchstart',e=>down(e.touches[0].clientY),{passive:true});
+  grip.addEventListener('touchmove', e=>move(e.touches[0].clientY),{passive:true});
+  grip.addEventListener('touchend', up);
+  grip.addEventListener('pointerdown',e=>{if(e.pointerType!=='mouse')return; down(e.clientY);
+    const mm=ev=>move(ev.clientY), mu=()=>{up();window.removeEventListener('pointermove',mm);window.removeEventListener('pointerup',mu);};
+    window.addEventListener('pointermove',mm); window.addEventListener('pointerup',mu);});
 }
 
 let entryTyp='strafe';
@@ -1028,11 +1073,37 @@ function doExport(){
   let title='', rows='';
   if(typ==='monat'){
     title='Monatsabrechnung';
-    const aktive=state.players.filter(p=>p.status==='aktiv').map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
-    const gesamt=aktive.reduce((s,o)=>s+o.saldo,0);
-    rows=`<table><tr><th>Spieler</th><th>Status</th><th class="r">Saldo</th></tr>
-      ${aktive.map(o=>`<tr><td>${o.p.name}</td><td>${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</td><td class="r">${eur(o.saldo)}</td></tr>`).join('')}
-      <tr class="sum"><td><b>Summe offene Salden</b></td><td></td><td class="r"><b>${eur(gesamt)}</b></td></tr></table>`;
+    const M=bis;
+    const m2=n=>n.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+    const ps=[...state.players].sort((a,b)=>a.name.localeCompare(b.name,'de'));
+    const body=ps.map((p,i)=>{
+      const inaktiv=p.status==='inaktiv';
+      const mb=monatsAnteil(p), mf=mfAnteil(p);
+      const stMon=strafenNetMonat(p.id,M), einMon=einzahlungMonat(p.id,M);
+      const summeBS=mb+mf+stMon;
+      const offen=einzahlungBis(p.id,M)-(beitragBis(p,M)+strafenNetBis(p.id,M)); // >0 Guthaben, <0 schuldet
+      const offCell = offen>0 ? `<b>${m2(offen)}</b> Guthaben` : offen<0 ? `<b class="owe">${m2(offen)}</b>` : `0,00 €`;
+      return `<tr class="${i%2?'g':'b'}">
+        <td class="name">${p.name}${inaktiv?' (inaktiv)':''}</td>
+        <td>${inaktiv?'0,00 €':(mb?m2(mb):'')}</td>
+        <td>${inaktiv?'0,00 €':(mf?m2(mf):'')}</td>
+        <td>${m2(stMon)}</td>
+        <td>${einMon?m2(einMon):'– €'}</td>
+        <td>${m2(summeBS)}</td>
+        <td class="off">${offCell}</td></tr>`;
+    }).join('');
+    rows=`<div class="matitle">SV Straelen · 2. Herren — Monatsabrechnung ${monatKurz(M)}</div>
+      <div class="mwrap"><div class="msidebar">${monatKurz(M)}</div>
+      <div style="flex:1;min-width:0"><div class="matop"></div>
+      <table class="ma"><thead><tr>
+        <th class="name">Name</th><th>Monats&shy;beitrag</th><th>MF-Beitrag</th>
+        <th>Summe Gutschriften und Strafen</th><th>Einzahlungen</th>
+        <th>Summe Beiträge und Strafen</th><th>Offener Betrag</th></tr></thead>
+      <tbody>${body}</tbody></table></div></div>
+      <div class="paybox"><b>Überweisung an den Kassenwart:</b>
+        <table class="pb"><tr><td>Name:</td><td>${konto.inhaber}</td><td>PayPal:</td><td><u>${konto.paypal}</u></td></tr>
+        <tr><td>IBAN:</td><td>${konto.iban}</td><td colspan="2"><span style="color:#c0392b"><u>Achtung:</u> Immer An „Freunde und Familie"</span></td></tr></table>
+      </div>`;
   } else if(typ==='strafen'){
     title='Strafen & Gutschriften';
     const items=state.strafen.filter(s=>inRange(s.datum)).sort((a,b)=>a.datum.localeCompare(b.datum));
@@ -1086,9 +1157,10 @@ function doExport(){
   }
   const w=window.open('','_blank');
   if(!w){alert('Bitte Pop-ups erlauben, um den PDF-Export zu öffnen.');return;}
-  const kopf = typ==='spieler' ? '' : `<div class="head"><h1>SV Straelen · 2. Herren</h1>
+  const kopf = (typ==='spieler'||typ==='monat') ? '' : `<div class="head"><h1>SV Straelen · 2. Herren</h1>
       <div class="meta">${title}<br>Zeitraum: ${von} – ${bis}</div></div>`;
   w.document.write(`<html><head><meta charset="utf-8"><title>${title}</title><style>
+    ${typ==='monat'?'@page{size:A4 landscape;margin:12mm;}':''}
     body{font-family:-apple-system,Arial,sans-serif;padding:32px;color:#1c1c1e;}
     h1{color:#006B3F;margin:0;font-size:22px;} h2{color:#006B3F;margin:14px 0 4px;font-size:18px;} h3{color:#006B3F;margin-top:26px;}
     table{width:100%;border-collapse:collapse;margin-top:8px;}
@@ -1099,6 +1171,23 @@ function doExport(){
     .meta{text-align:right;font-size:12px;color:#555;}
     .pay{margin-top:14px;padding:12px 14px;background:#f4f8f5;border:1px solid #cfe3d6;border-radius:8px;font-size:12.5px;line-height:1.65;}
     section{margin-bottom:14px;}
+    /* Monatsabrechnung */
+    .matitle{font-weight:800;color:#1fa64a;font-size:15px;margin-bottom:8px;}
+    .mwrap{display:flex;border:1px solid #d6d6d6;}
+    .msidebar{background:#1fa64a;color:#fff;font-weight:800;font-size:20px;writing-mode:vertical-rl;
+      transform:rotate(180deg);display:flex;align-items:center;justify-content:center;padding:8px 4px;}
+    .matop{height:10px;background:#1fa64a;}
+    table.ma{width:100%;border-collapse:collapse;}
+    table.ma th{background:#34404d;color:#fff;font-size:10.5px;font-weight:700;padding:8px 6px;text-align:right;vertical-align:bottom;line-height:1.2;}
+    table.ma th.name{text-align:left;}
+    table.ma td{padding:6px 8px;font-size:11.5px;text-align:right;border:0;white-space:nowrap;}
+    table.ma td.name{text-align:left;}
+    table.ma tr.b{background:#dce9f5;} table.ma tr.g{background:#dceadb;}
+    table.ma td.off{padding-left:12px;}
+    .owe{color:#c0392b;}
+    .paybox{margin-top:18px;background:#ededed;padding:16px 20px;}
+    .paybox .pb{border:0;width:100%;margin-top:10px;}
+    .paybox .pb td{border:0;padding:4px 8px;font-size:13px;}
   </style></head><body>
     ${kopf}
     ${rows}
