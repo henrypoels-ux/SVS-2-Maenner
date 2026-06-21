@@ -263,7 +263,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '1.2';    // App-Version (dauerhaft eingeloggt)
+const VERSION = '1.3';    // App-Version (rollenbasierte Sicherheit)
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 let HEUTE = '2026-08';    // Stichtag / aktueller Monat – in echt = laufender Monat, hier in Einstellungen änderbar zum Testen
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
@@ -1371,7 +1371,6 @@ async function afterLogin(){
   const {data:{user}} = await sb.auth.getUser();
   if(!user){ showLogin(); return; }
   let {data:rows} = await sb.from('players').select('*').eq('auth_id',user.id).limit(1);
-  if(!rows || !rows.length){ await sb.rpc('claim_player'); ({data:rows} = await sb.from('players').select('*').eq('auth_id',user.id).limit(1)); }
   if(!rows || !rows.length){ ({data:rows} = await sb.from('players').select('*').eq('email',user.email).limit(1)); }
   currentUser = (rows && rows[0]) ? mapPlayer(rows[0]) : {name:user.email, role:'spieler'};
   role = currentUser.role || 'spieler';
@@ -1399,7 +1398,7 @@ async function doLogin(){
       if(e2){ err.textContent='Erstanmeldung fehlgeschlagen: '+e2.message; return; }
       const {error:e3} = await sb.auth.signInWithPassword({email, password:pw});
       if(e3){ err.textContent='Konto erstellt, aber Login fehlgeschlagen. In Supabase bitte „Confirm email" ausschalten.'; return; }
-      await sb.rpc('claim_player');
+      await sb.rpc('claim_player',{p_pw:pw});
     }
     await afterLogin();
   }catch(ex){ err.textContent='Fehler: '+(ex.message||ex); }
