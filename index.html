@@ -273,7 +273,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '1.9';    // App-Version
+const VERSION = '2.0';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 function nowMonth(){return new Date().toISOString().slice(0,7);}
 function heuteDatum(){return new Date().toISOString().slice(0,10);}
@@ -559,11 +559,11 @@ function saldoListe(items,emptyMsg){
   const me = currentUser ? currentUser.id : null;
   const sorted = [...items].sort((a,b)=>(a.p.id===me?-1:b.p.id===me?1:0));
   return `<div class="card"><ul class="list">
-    ${sorted.length?sorted.map(o=>{const own=o.p.id===me;
-      return `<li class="row" style="${own?'background:rgba(255,209,0,.2)':''}">
+    ${sorted.length?sorted.map(o=>{const own=o.p.id===me; const klick = role==='kassenwart' || o.p.id===me;
+      return `<li class="row ${klick?'tap':''}" ${klick?`onclick="openHistorie(${o.p.id})"`:''} style="${own?'background:rgba(255,209,0,.2)':''}">
       <div class="ava" style="${own?'background:var(--gruen)':o.saldo<0?'background:var(--gruen-ios)':''}">${initials(o.p.name)}</div>
       <div class="r-main"><div class="r-title">${o.p.name}${own?' <b style="color:var(--gruen)">(du)</b>':''}</div><div class="r-sub">${o.saldo>0?'offen':o.saldo<0?'Guthaben':'ausgeglichen'}</div></div>
-      <div class="r-right"><div class="amount ${o.saldo>0?'neg':o.saldo<0?'pos':''}">${o.saldo<0?'+':''}${eur(Math.abs(o.saldo))}</div></div></li>`;}).join('')
+      <div class="r-right"><div class="amount ${o.saldo>0?'neg':o.saldo<0?'pos':''}">${o.saldo<0?'+':''}${eur(Math.abs(o.saldo))}</div>${klick?'<span class="chev">›</span>':''}</div></li>`;}).join('')
       : `<div class="empty">${emptyMsg}</div>`}
   </ul></div>`;
 }
@@ -616,6 +616,30 @@ function openPaypal(){ let p=(konto.paypal||'').trim(); if(!p)return;
   if(/^https?:\/\//i.test(p)||/paypal\.me/i.test(p)){ const url=/^https?:\/\//i.test(p)?p:'https://'+p.replace(/^\/+/,''); window.open(url,'_blank'); }
   else if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(p).then(()=>alert('PayPal-Adresse kopiert: '+p)).catch(()=>prompt('PayPal-Adresse:',p)); }
   else prompt('PayPal-Adresse:',p); }
+
+/* Verlauf/Historie eines Spielers (eigene oder – als Kassenwart – alle) */
+function openHistorie(pid){
+  const p=player(pid); if(!p) return;
+  const sal=playerSaldo(pid);
+  const mv=[];
+  if(p.status==='aktiv') SAISON.forEach(([k])=>{ if(p.months[k]&&k<=HEUTE) mv.push({d:k+'-01',t:'Beitrag '+monthLabel(k),b:monatlich(p)}); });
+  state.strafen.filter(s=>s.playerId===pid).forEach(s=>mv.push({d:s.datum,t:(s.typ==='gutschrift'?'Gutschrift: ':'Strafe: ')+s.grund,b:s.typ==='gutschrift'?-s.betrag:s.betrag}));
+  state.einnahmen.filter(e=>e.playerId===pid).forEach(e=>{
+    if(e.bank)   mv.push({d:e.monat+'-01',t:'Einzahlung Bank ('+monthLabel(e.monat)+')',b:-e.bank});
+    if(e.paypal) mv.push({d:e.monat+'-01',t:'Einzahlung PayPal ('+monthLabel(e.monat)+')',b:-e.paypal});
+  });
+  state.bareinnahmen.filter(e=>e.playerId===pid).forEach(e=>mv.push({d:e.datum,t:'Bar: '+(e.text||'Einzahlung'),b:-e.betrag}));
+  mv.sort((a,b)=>b.d.localeCompare(a.d));
+  const grad = sal>0?'linear-gradient(135deg,#e74c3c,#c0392b)':sal<0?'linear-gradient(135deg,var(--gruen-hell),var(--gruen))':'linear-gradient(135deg,#9aa0a6,#7c8085)';
+  const rows = mv.length ? mv.map(m=>`<li class="row"><div class="r-main"><div class="r-title">${m.t}</div><div class="r-sub">${dt(m.d)}</div></div>
+    <div class="r-right"><div class="amount ${m.b<0?'pos':'neg'}">${m.b<0?'−':'+'}${eur(Math.abs(m.b))}</div></div></li>`).join('') : '<div class="empty">Noch keine Bewegungen</div>';
+  showSheet(`<h3>${p.name}</h3>
+    <div class="kpi" style="background:${grad}"><div class="lbl">${sal>0?'Offen':sal<0?'Guthaben':'Saldo'}</div><div class="val">${eur(Math.abs(sal))}</div></div>
+    <div class="sec-title">Verlauf</div>
+    <div class="card"><ul class="list">${rows}</ul></div>
+    <p class="note">Rot = Soll (fällige Beiträge + Strafen). Grün = Einzahlungen + Gutschriften. Saldo oben = Differenz.</p>
+    <button class="btn sec" style="margin-top:14px" onclick="closeSheet()">Schließen</button>`);
+}
 
 function statusLabel(s){return {aktiv:'Aktiv',inaktiv:'Inaktiv',gast:'Gast',coach:'Coach'}[s];}
 
