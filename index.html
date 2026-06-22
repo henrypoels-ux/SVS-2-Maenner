@@ -273,7 +273,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '1.7';    // App-Version
+const VERSION = '1.9';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 function nowMonth(){return new Date().toISOString().slice(0,7);}
 function heuteDatum(){return new Date().toISOString().slice(0,10);}
@@ -476,7 +476,9 @@ const TITLES = {uebersicht:['Übersicht','Saison 2026/27'],strafen:['Strafen & G
 function render(){
   // Rollen-Hinweis oben
   const rb=document.getElementById('rolebanner');
-  if(role==='kassenwart') rb.innerHTML=`<div class="rolebanner kw">🔓 Eingeloggt als <b>Kassenwart</b> · alle Bearbeitungsrechte aktiv</div>`;
+  const RL={kassenwart:'Kassenwart',strafenwart:'Strafenwart',spieler:'Spieler'};
+  if(currentUser && role!==currentUser.role) rb.innerHTML=`<div class="rolebanner sw">👁 Vorschau als <b>${RL[role]||role}</b> · zurück über ⚙ Einstellungen</div>`;
+  else if(role==='kassenwart') rb.innerHTML=`<div class="rolebanner kw">🔓 Eingeloggt als <b>Kassenwart</b> · alle Bearbeitungsrechte aktiv</div>`;
   else if(role==='strafenwart') rb.innerHTML=`<div class="rolebanner sw">🔓 Eingeloggt als <b>Strafenwart</b> · darf Strafen &amp; Gutschriften eintragen</div>`;
   else rb.innerHTML='';
   // Tab Bar (Kasse ist für Spieler ausgeblendet)
@@ -589,7 +591,6 @@ function viewUebersicht(){
   }
   // Kassenwart/Strafenwart: Kassenstand + offene Salden
   const s = salden();
-  const offene = all.filter(o=>o.saldo!==0);
   const bSaison = beitragAnsicht==='saison';
   return zahlung + `
   <div class="kpi"><div class="lbl">Kassenstand gesamt</div>
@@ -602,7 +603,7 @@ function viewUebersicht(){
     <div class="tile"><div class="t-lbl">🍺 Theke offen</div><div class="t-val neg">${eur(s.thekeOffen)}</div><div class="t-sub">noch zu überweisen</div></div>
     <div class="tile"><div class="t-lbl">⚠️ Offene Salden</div><div class="t-val neg">${eur(s.offeneSalden)}</div><div class="t-sub">Spieler schulden</div></div>
   </div>
-  <div class="sec-title">Saldo je Spieler (Stichtag ${monthLabel(HEUTE)})</div>${saldoListe(offene,'Alles ausgeglichen 🎉')}
+  <div class="sec-title">Saldo je Spieler (Stichtag ${monthLabel(HEUTE)})</div>${saldoListe(all,'Keine Spieler')}
   <p class="note">Saldo = fällige Beiträge + Strafen − Gutschriften − Einzahlungen (bis ${monthLabel(HEUTE)}). Rot = offen, grün = Guthaben.</p>`;
 }
 function toggleBeitragAnsicht(){ beitragAnsicht = beitragAnsicht==='saison'?'aktuell':'saison'; render(); }
@@ -816,7 +817,7 @@ function viewSpieler(){
       return `<li class="row ${can?'tap':''}" ${can?`onclick="openPlayer(${p.id})"`:''}>
       <div class="ava">${initials(p.name)}</div>
       <div class="r-main"><div class="r-title">${p.name}</div>
-      <div class="r-sub">${st==='aktiv'?'Beitrag '+eur(beitrag(p))+' / Saison':statusLabel(st)}${role==='kassenwart'?(p.angemeldet?' · ✓ angemeldet':' · ✖ noch nicht'):''}</div></div>
+      <div class="r-sub">${st==='aktiv'?(role==='spieler'?'Aktiv':'Beitrag '+eur(beitrag(p))+' / Saison'):statusLabel(st)}${role==='kassenwart'?(p.angemeldet?' · ✓ angemeldet':' · ✖ noch nicht'):''}</div></div>
       <div class="r-right">${sal!==0?`<span class="pill ${sal>0?'open':'pp'}">${sal>0?'offen':'Guthaben'} ${eur(Math.abs(sal))}</span>`:''}${can?'<span class="chev">›</span>':''}</div></li>`;
     }).join('')}
     </ul></div>`;
@@ -1304,7 +1305,16 @@ function openSettings(){
         <div class="r-sub">Übersicht · Strafen · Schiedsrichter</div></div>
         <div class="r-right"><span class="chev">›</span></div></li>
     </ul></div>` : '';
-  const rolleLabel = {kassenwart:'Kassenwart',strafenwart:'Strafenwart',spieler:'Spieler'}[role]||'Spieler';
+  const echteRolle = (currentUser&&currentUser.role)||role;
+  const rolleLabel = {kassenwart:'Kassenwart',strafenwart:'Strafenwart',spieler:'Spieler'}[echteRolle]||'Spieler';
+  const previewBlock = (currentUser && currentUser.role==='kassenwart') ? `
+    <div class="sec-title">Ansicht (Vorschau)</div>
+    <div class="seg">
+      <button class="${role==='kassenwart'?'active':''}" onclick="setView('kassenwart')">Kassenwart</button>
+      <button class="${role==='strafenwart'?'active':''}" onclick="setView('strafenwart')">Strafenwart</button>
+      <button class="${role==='spieler'?'active':''}" onclick="setView('spieler')">Spieler</button>
+    </div>
+    <p class="note">Nur zum Anschauen – ändert deine Ansicht, nicht deine echten Rechte.</p>` : '';
   showSheet(`<h3>⚙ Einstellungen</h3>
     <div class="sec-title" style="margin-top:0">Angemeldet</div>
     <div class="card"><ul class="list">
@@ -1316,11 +1326,14 @@ function openSettings(){
       <li class="row tap" onclick="logout()"><div class="r-main"><div class="r-title" style="color:var(--rot)">Abmelden</div></div>
         <div class="r-right"><span class="chev">›</span></div></li>
     </ul></div>
+    ${previewBlock}
     ${exportBlock}
     ${beitragBlock}
     <button class="btn sec" style="margin-top:14px" onclick="closeSheet()">Schließen</button>
     <p class="note" style="text-align:center">Mannschaftskasse 2. Herren · Version ${VERSION}</p>`);
 }
+
+function setView(r){ role=r; closeSheet(); render(); window.scrollTo(0,0); }
 
 /* ---- PDF-Export (Zeitraum wählbar) ---- */
 function openExport(){
@@ -1345,23 +1358,28 @@ function doExport(){
     title='Monatsabrechnung';
     const M=bis;
     const m2=n=>n.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
-    const ps=[...state.players].sort((a,b)=>a.name.localeCompare(b.name,'de'));
-    const body=ps.map((p,i)=>{
-      const inaktiv=p.status==='inaktiv';
+    const rowFn=(p,i)=>{
       const mb=monatsAnteil(p), mf=mfAnteil(p);
       const stMon=strafenNetMonat(p.id,M), einMon=einzahlungMonat(p.id,M);
       const summeBS=mb+mf+stMon;
       const offen=einzahlungBis(p.id,M)-(beitragBis(p,M)+strafenNetBis(p.id,M)); // >0 Guthaben, <0 schuldet
       const offCell = offen>0 ? `<b>${m2(offen)}</b> Guthaben` : offen<0 ? `<b class="owe">${m2(offen)}</b>` : `0,00 €`;
       return `<tr class="${i%2?'g':'b'}">
-        <td class="name">${p.name}${inaktiv?' (inaktiv)':''}</td>
-        <td>${inaktiv?'0,00 €':(mb?m2(mb):'')}</td>
-        <td>${inaktiv?'0,00 €':(mf?m2(mf):'')}</td>
+        <td class="name">${p.name}${p.status==='coach'?' (Coach)':''}</td>
+        <td>${mb?m2(mb):''}</td>
+        <td>${mf?m2(mf):''}</td>
         <td>${m2(stMon)}</td>
         <td>${einMon?m2(einMon):'– €'}</td>
         <td>${m2(summeBS)}</td>
         <td class="off">${offCell}</td></tr>`;
-    }).join('');
+    };
+    const haupt=state.players.filter(p=>p.status==='aktiv'||p.status==='coach').sort((a,b)=>a.name.localeCompare(b.name,'de'));
+    const unten=state.players.filter(p=>p.status==='inaktiv'||p.status==='gast').sort((a,b)=>a.name.localeCompare(b.name,'de'));
+    let body=haupt.map((p,i)=>rowFn(p,i)).join('');
+    if(unten.length){
+      body+=`<tr><td colspan="7" style="background:#dfe6df;font-weight:700">Inaktive Spieler &amp; Gäste</td></tr>`;
+      body+=unten.map((p,i)=>rowFn(p,i)).join('');
+    }
     rows=`<div class="matitle">SV Straelen · 2. Herren — Monatsabrechnung ${monatKurz(M)}</div>
       <div class="mwrap"><div class="msidebar">${monatKurz(M)}</div>
       <div style="flex:1;min-width:0"><div class="matop"></div>
