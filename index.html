@@ -6,6 +6,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#006B3F">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="apple-mobile-web-app-title" content="Kasse 2. Herren">
 <link rel="apple-touch-icon" href="SVS_Logo_200x200.png">
 <link rel="icon" type="image/png" href="SVS_Logo_200x200.png">
@@ -274,7 +277,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '2.1';    // App-Version
+const VERSION = '2.3';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 function nowMonth(){return new Date().toISOString().slice(0,7);}
 function heuteDatum(){return new Date().toISOString().slice(0,10);}
@@ -586,7 +589,9 @@ function zahlungCard(){
   </ul></div>`;
 }
 function viewUebersicht(){
-  const all = state.players.filter(p=>p.status==='aktiv'||p.status==='coach')
+  // Aktive + Coaches immer; Inaktive & Gäste nur, wenn ihr Saldo ungleich 0 ist
+  const all = state.players
+    .filter(p=> p.status==='aktiv' || p.status==='coach' || ((p.status==='inaktiv'||p.status==='gast') && playerSaldo(p.id)!==0))
     .map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
   const zahlung = role!=='kassenwart' ? zahlungCard() : '';
   // Spieler: Zahlungswege + Saldenliste, kein Kassenstand
@@ -1414,6 +1419,8 @@ function openSettings(){
         <div class="r-sub">Rolle: ${rolleLabel}</div></div></li>
       <li class="row tap" onclick="openPasswort()"><div class="r-main"><div class="r-title">Passwort ändern</div></div>
         <div class="r-right"><span class="chev">›</span></div></li>
+      <li class="row tap" onclick="forceReload()"><div class="r-main"><div class="r-title">🔄 App aktualisieren</div>
+        <div class="r-sub">neueste Version laden</div></div><div class="r-right"><span class="chev">›</span></div></li>
       <li class="row tap" onclick="logout()"><div class="r-main"><div class="r-title" style="color:var(--rot)">Abmelden</div></div>
         <div class="r-right"><span class="chev">›</span></div></li>
     </ul></div>
@@ -1425,6 +1432,7 @@ function openSettings(){
 }
 
 function setView(r){ role=r; closeSheet(); render(); window.scrollTo(0,0); }
+function forceReload(){ location.replace(location.href.split('?')[0] + '?v=' + Date.now()); }
 
 /* ---- PDF-Export (Zeitraum wählbar) ---- */
 function openExport(){
