@@ -216,6 +216,7 @@
   #tooltip{position:fixed;z-index:300;display:none;max-width:240px;background:#1c1c1e;color:#fff;
     font-size:12.5px;line-height:1.4;padding:9px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.35);
     pointer-events:none;}
+  [data-info]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
 </style>
 </head>
 <body>
@@ -273,7 +274,7 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '2.0';    // App-Version
+const VERSION = '2.1';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 function nowMonth(){return new Date().toISOString().slice(0,7);}
 function heuteDatum(){return new Date().toISOString().slice(0,10);}
@@ -540,10 +541,14 @@ function initInfo(){
     el.addEventListener('mousemove', e=>moved(e.clientX,e.clientY));
     el.addEventListener('mouseup', cancel);
     el.addEventListener('mouseleave', cancel);
+    el.addEventListener('contextmenu', e=>e.preventDefault());
   });
 }
+let lastLP=0;
+function strafeTap(id){ if(Date.now()-lastLP<600) return; openStrafeEdit(id); }
 function showTooltip(text,x,y){
   const tt=document.getElementById('tooltip'); if(!tt) return;
+  lastLP=Date.now();
   tt.textContent=text; tt.style.display='block';
   const w=tt.offsetWidth, h=tt.offsetHeight, vw=window.innerWidth, vh=window.innerHeight;
   tt.style.left=Math.min(Math.max(8,x-w/2), vw-w-8)+'px';
@@ -581,7 +586,7 @@ function zahlungCard(){
   </ul></div>`;
 }
 function viewUebersicht(){
-  const all = state.players.filter(p=>p.status==='aktiv')
+  const all = state.players.filter(p=>p.status==='aktiv'||p.status==='coach')
     .map(p=>({p,saldo:playerSaldo(p.id)})).sort((a,b)=>b.saldo-a.saldo);
   const zahlung = role!=='kassenwart' ? zahlungCard() : '';
   // Spieler: Zahlungswege + Saldenliste, kein Kassenstand
@@ -665,14 +670,15 @@ function viewStrafen(){
       const p=player(s.playerId); const gut=s.typ==='gutschrift';
       const avaStyle=gut?'background:var(--gruen-ios)':'';
       const info='Eingetragen '+(s.createdAt?new Date(s.createdAt).toLocaleString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—')+' von '+(s.erfasstVon||'unbekannt');
+      const sub=`${s.grund} · ${dt(s.datum)}${s.anmerkung?`<br><span style="opacity:.85">(${s.anmerkung})</span>`:''}`;
       const right=`<div class="amount ${gut?'pos':''}">${gut?'+':''}${eur(s.betrag).replace('-','')}</div>
         <span class="pill ${gut?'pp':'open'}">${gut?'Gutschrift':'Strafe'}</span>`;
-      const inner=`<div class="row" data-info="${info}"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
-        <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${s.grund} · ${dt(s.datum)}</div></div>
+      const inner=`<div class="row ${can?'tap':''}" data-info="${info}" ${can?`onclick="strafeTap(${s.id})"`:''}><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
+        <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${sub}</div></div>
         <div class="r-right">${right}</div></div>`;
       if(can) return swipeRow(inner,`deleteStrafe(${s.id})`);
       return `<li class="row" data-info="${info}"><div class="ava" style="${avaStyle}">${p?initials(p.name):'?'}</div>
-        <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${s.grund} · ${dt(s.datum)}</div></div>
+        <div class="r-main"><div class="r-title">${p?p.name:'—'}</div><div class="r-sub">${sub}</div></div>
         <div class="r-right">${right}</div></li>`;
     }).join('');
     return monthSection(g.label, (sum<0?'+':'')+eur(Math.abs(sum)), rows, can);
@@ -680,6 +686,27 @@ function viewStrafen(){
   return head+filterBtns+body+(can?'<p class="note">Plus-Button öffnet das Eingabefenster – oben zwischen <b>Strafe</b> und <b>Gutschrift</b> umschaltbar. Beides zählt automatisch zum Spieler-Saldo. Einen Eintrag nach links wischen zum Löschen.</p>':'');
 }
 function setStrafenFilter(f){ strafenFilter=f; render(); }
+function openStrafeEdit(id){
+  if(!canEdit('strafen')) return;
+  const s=state.strafen.find(x=>x.id===id); if(!s) return;
+  const p=player(s.playerId);
+  const esc=t=>(t||'').replace(/"/g,'&quot;');
+  showSheet(`<h3>${s.typ==='gutschrift'?'Gutschrift':'Strafe'} bearbeiten</h3>
+    <p class="note" style="margin:0 0 12px">${p?p.name:''} · ${dt(s.datum)}</p>
+    <div class="field"><label>Grund</label><input id="se_g" value="${esc(s.grund)}"></div>
+    <div class="field"><label>Betrag €</label><input id="se_b" type="number" value="${s.betrag}"></div>
+    <div class="field"><label>Anmerkung (optional)</label><input id="se_a" value="${esc(s.anmerkung)}" placeholder="z.B. 3 Minuten zu spät"></div>
+    <button class="btn" onclick="saveStrafeEdit(${id})">Speichern</button>
+    <button class="btn" style="margin-top:8px;background:var(--rot)" onclick="closeSheet();deleteStrafe(${id})">Löschen</button>
+    <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
+}
+async function saveStrafeEdit(id){
+  const s=state.strafen.find(x=>x.id===id); if(!s) return;
+  const grund=document.getElementById('se_g').value||s.grund;
+  const betrag=+document.getElementById('se_b').value;
+  const anmerkung=(document.getElementById('se_a').value||'').trim()||null;
+  try{ await dbUpdate('strafen',id,{grund,betrag,anmerkung}); s.grund=grund; s.betrag=betrag; s.anmerkung=anmerkung||undefined; closeSheet();render(); }catch(e){}
+}
 
 function viewKasse(){
   const subs = [['einnahmen','Einnahmen'],['ausgaben','Ausgaben'],['bar','Kassenbuch Bar'],['theke','Theke']];
@@ -1013,7 +1040,7 @@ let entryTyp='strafe';
 const val=id=>{const el=document.getElementById(id);return el?el.value:undefined;};
 function addStrafe(){ entryTyp='strafe'; openEintrag({}); }
 function setEntryTyp(t){
-  const prev={pid:val('f_p'),betrag:val('f_b'),datum:val('f_d'),grund:val('f_gt')};
+  const prev={pid:val('f_p'),betrag:val('f_b'),datum:val('f_d'),grund:val('f_gt'),anm:val('f_anm')};
   entryTyp=t; openEintrag(prev);
 }
 function openEintrag(pre){
@@ -1031,7 +1058,8 @@ function openEintrag(pre){
     <div class="field" style="display:${entryTyp==='gutschrift'?'block':'none'}"><label>Grund (frei eingeben)</label>
       <input id="f_gt" value="${pre.grund||''}" placeholder="z.B. Auslage / aus Kasse bezahlt"></div>
     <div class="field"><label>Betrag €</label><input id="f_b" type="number" value="${betrag}"></div>
-    <div class="field"><label>Datum</label><input id="f_d" type="date" value="${pre.datum||'2026-08-21'}"></div>
+    <div class="field"><label>Anmerkung (optional)</label><input id="f_anm" value="${pre.anm||''}" placeholder="z.B. 3 Minuten zu spät"></div>
+    <div class="field"><label>Datum</label><input id="f_d" type="date" value="${pre.datum||heuteDatum()}"></div>
     <button class="btn" onclick="saveEintrag()">Speichern</button>
     <button class="btn sec" onclick="openSammel()">Sammelstrafe / Sonderbeitrag (mehrere Spieler)</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
@@ -1089,9 +1117,10 @@ async function saveEintrag(){
   if(entryTyp==='strafe') grund=document.getElementById('f_g').selectedOptions[0].textContent.replace(/ \(.*\)/,'');
   else grund=document.getElementById('f_gt').value||'Gutschrift';
   const betrag=+document.getElementById('f_b').value, datum=document.getElementById('f_d').value;
+  const anmerkung=(document.getElementById('f_anm').value||'').trim()||null;
   try{
-    const r=await dbInsert('strafen',{player_id:pid,typ:entryTyp,grund,betrag,datum,erfasst_von:(currentUser&&currentUser.name)||null});
-    state.strafen.push({id:r.id,playerId:pid,typ:entryTyp,grund,betrag:Number(r.betrag),datum:r.datum,createdAt:r.created_at,erfasstVon:r.erfasst_von});
+    const r=await dbInsert('strafen',{player_id:pid,typ:entryTyp,grund,betrag,datum,anmerkung,erfasst_von:(currentUser&&currentUser.name)||null});
+    state.strafen.push({id:r.id,playerId:pid,typ:entryTyp,grund,betrag:Number(r.betrag),datum:r.datum,anmerkung:r.anmerkung||undefined,createdAt:r.created_at,erfasstVon:r.erfasst_von});
     closeSheet();render();
   }catch(e){}
 }
@@ -1259,7 +1288,9 @@ let editPid=null;
 function openPlayer(id){
   editPid=id;const p=player(id);
   const chips=SAISON.map(([k,l])=>`<div class="mchip ${p.months[k]?'on':''}" onclick="toggleMonth('${k}')">${l}<small>${p.months[k]?eur(monatlich(p)):'frei'}</small></div>`).join('');
-  showSheet(`<h3>${p.name}</h3>
+  showSheet(`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h3 style="margin:0">${p.name}</h3>
+      <button onclick="openPlayerEdit(${id})" title="Name / Login / Passwort" style="border:0;background:#EFEFF4;color:var(--gruen);width:38px;height:38px;border-radius:11px;font-size:18px;cursor:pointer">🔧</button></div>
     <div class="field"><label>Status</label><select id="f_s" onchange="setStatus(${id},this.value)">
       ${['aktiv','inaktiv','gast','coach'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${statusLabel(s)}</option>`).join('')}</select></div>
     <div class="field"><label>Beitragsart</label><select id="f_art2" onchange="setArt(${id},this.value)">
@@ -1290,6 +1321,42 @@ async function deleteSpieler(id){
     state.einnahmen=state.einnahmen.filter(e=>e.playerId!==id);
     closeSheet();render();
   }catch(e){}
+}
+/* ---- Name / Login / Passwort (Kassenwart) ---- */
+function openPlayerEdit(id){
+  if(!canEdit('spieler')) return;
+  const p=player(id); const esc=t=>(t||'').replace(/"/g,'&quot;');
+  showSheet(`<h3>🔧 Spieler bearbeiten</h3>
+    <div class="field"><label>Name</label><input id="pe_n" value="${esc(p.name)}"></div>
+    <button class="btn" onclick="savePlayerName(${id})">Name speichern</button>
+    <div class="card" style="margin-top:16px;padding:14px 16px">
+      <div class="r-sub" style="margin-bottom:4px">Login (zum Anmelden)</div>
+      <div class="r-title">${p.login||'—'}</div></div>
+    <button class="btn sec" style="margin-top:10px" onclick="loginAnNamen(${id})">Login an Namen anpassen + Zugang zurücksetzen</button>
+    <button class="btn sec" style="margin-top:8px" onclick="passwortReset(${id})">Passwort auf Standard zurücksetzen</button>
+    <p class="note">„Login anpassen" erzeugt den Login neu aus dem Namen (z. B. nach Tippfehler) und setzt den Zugang zurück. „Passwort zurücksetzen" stellt das Standardpasswort wieder her. In beiden Fällen meldet sich der Spieler neu an.</p>
+    <button class="btn sec" style="margin-top:8px" onclick="openPlayer(${id})">‹ Zurück</button>`);
+}
+async function savePlayerName(id){
+  const p=player(id); const n=(document.getElementById('pe_n').value||'').trim()||p.name;
+  try{ await dbUpdate('players',id,{name:n}); p.name=n; openPlayerEdit(id); }catch(e){}
+}
+async function loginAnNamen(id){
+  const p=player(id);
+  if(!confirm('Login aus dem Namen neu erzeugen und Zugang zurücksetzen?\nDer Spieler meldet sich danach mit dem neuen Login und dem Standardpasswort „Saison2026-27" an.')) return;
+  const login=translit(p.name), email=login+'@svstraelen-2herren.de';
+  try{
+    await dbUpdate('players',id,{login,email});
+    await sb.rpc('reset_player',{p_id:id});
+    p.login=login; p.email=email; p.angemeldet=false;
+    openPlayerEdit(id);
+    alert('Neuer Login: '+login+'\nPasswort: Saison2026-27');
+  }catch(e){ alert('Fehler: '+(e.message||e)); }
+}
+async function passwortReset(id){
+  const p=player(id);
+  if(!confirm('Passwort auf das Standardpasswort zurücksetzen?\nDer Spieler meldet sich dann mit „Saison2026-27" an und kann es neu setzen.')) return;
+  try{ await sb.rpc('reset_player',{p_id:id}); p.angemeldet=false; alert('Zurückgesetzt.\nLogin: '+p.login+'\nPasswort: Saison2026-27'); }catch(e){ alert('Fehler: '+(e.message||e)); }
 }
 async function toggleMonth(k){const p=player(editPid);if(p.status!=='aktiv')return;p.months[k]=!p.months[k];refreshPlayerSheet();try{await dbUpdate('players',p.id,{months:p.months});}catch(e){}}
 async function setStatus(id,v){const p=player(id);p.status=v;refreshPlayerSheet();try{await dbUpdate('players',id,{status:v});}catch(e){}}
@@ -1551,7 +1618,7 @@ async function loadAll(){
   ]);
   state.players = (pl.data||[]).map(mapPlayer);
   state.katalog = (ka.data||[]).map(r=>({id:r.id,name:r.name,betrag:Number(r.betrag),hinweis:r.hinweis}));
-  state.strafen = (st.data||[]).map(r=>({id:r.id,playerId:r.player_id,typ:r.typ,grund:r.grund,betrag:Number(r.betrag),datum:r.datum,refAusgabe:r.ref_ausgabe||undefined,refTheke:r.ref_theke||undefined,createdAt:r.created_at,erfasstVon:r.erfasst_von}));
+  state.strafen = (st.data||[]).map(r=>({id:r.id,playerId:r.player_id,typ:r.typ,grund:r.grund,betrag:Number(r.betrag),datum:r.datum,anmerkung:r.anmerkung||undefined,refAusgabe:r.ref_ausgabe||undefined,refTheke:r.ref_theke||undefined,createdAt:r.created_at,erfasstVon:r.erfasst_von}));
   state.einnahmen = (ei.data||[]).map(r=>({id:r.id,playerId:r.player_id,monat:r.monat,bank:Number(r.bank),paypal:Number(r.paypal)}));
   state.transfers = (tr.data||[]).map(r=>({id:r.id,monat:r.monat,betrag:Number(r.betrag)}));
   state.bareinnahmen = (ba.data||[]).map(r=>({id:r.id,playerId:r.player_id||null,datum:r.datum,text:r.text,betrag:Number(r.betrag)}));
