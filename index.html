@@ -277,15 +277,15 @@ async function dbDelete(table,id){const{error}=await sb.from(table).delete().eq(
 function translit(s){return (s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/[^a-z0-9.]+/g,'.').replace(/\.+/g,'.').replace(/^\.|\.$/g,'');}
 
 /* =================== Beispieldaten =================== */
-const VERSION = '2.3';    // App-Version
+const VERSION = '2.4';    // App-Version
 let MB = 15, MMB = 10;    // Monatsbeitrag € und MF-/Mannschaftsbeitrag € – beide MONATLICH (in Einstellungen änderbar)
 function nowMonth(){return new Date().toISOString().slice(0,7);}
 function heuteDatum(){return new Date().toISOString().slice(0,10);}
 function clampSaison(m){const k=SAISON.map(x=>x[0]);return m<k[0]?k[0]:m>k[k.length-1]?k[k.length-1]:m;}
 let HEUTE = nowMonth();   // aktueller Monat – stellt sich automatisch um
 let konto = { inhaber:'Henry Poels', iban:'DE 33 1203 0000 1202 2869 91', bank:'', paypal:'henry.poels@yahoo.com' };
-const SAISON = [ // Saison 2026/27 – Juli 2026 bis Mai 2027
-  ['2026-07','Jul'],['2026-08','Aug'],['2026-09','Sep'],['2026-10','Okt'],['2026-11','Nov'],['2026-12','Dez'],
+const SAISON = [ // Saison 2026/27 – Juni 2026 bis Mai 2027
+  ['2026-06','Jun'],['2026-07','Jul'],['2026-08','Aug'],['2026-09','Sep'],['2026-10','Okt'],['2026-11','Nov'],['2026-12','Dez'],
   ['2027-01','Jan'],['2027-02','Feb'],['2027-03','Mär'],['2027-04','Apr'],['2027-05','Mai']
 ];
 
@@ -1444,7 +1444,7 @@ function openExport(){
       <option value="strafen">Strafen & Gutschriften</option>
       <option value="schiri">Schiedsrichterabrechnungen</option></select></div>
     <div class="field" id="ex_f_monat"><label>Monat</label><input id="ex_monat" type="month" value="${clampSaison(HEUTE)}"></div>
-    <div class="field" id="ex_f_von" style="display:none"><label>Von Monat</label><input id="ex_von" type="month" value="2026-07"></div>
+    <div class="field" id="ex_f_von" style="display:none"><label>Von Monat</label><input id="ex_von" type="month" value="2026-06"></div>
     <div class="field" id="ex_f_bis" style="display:none"><label>Bis Monat</label><input id="ex_bis" type="month" value="${HEUTE}"></div>
     <button class="btn" onclick="doExport()">Als PDF exportieren</button>
     <button class="btn sec" onclick="closeSheet()">Abbrechen</button>`);
@@ -1657,8 +1657,11 @@ function svg(d){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 function mapPlayer(r){
   return {id:r.id, name:r.name, login:r.login, email:r.email, status:r.status, role:r.role, art:r.art,
     angemeldet:!!r.auth_id,
-    months:(r.months && Object.keys(r.months).length)?r.months:monthsAll(true)};
+    months:withJuni((r.months && Object.keys(r.months).length)?{...r.months}:monthsAll(true))};
 }
+/* Saison-Start nachträglich auf Juni vorgezogen: fehlt der Juni-Wert eines Spielers,
+   folgt er dem Juli-Wert (wer ab Juli dabei ist, zahlt auch Juni). In der App individuell abwählbar. */
+function withJuni(m){ if(m['2026-06']===undefined) m['2026-06'] = (m['2026-07']!==undefined ? m['2026-07'] : true); return m; }
 async function loadAll(){
   const [pl,ka,st,ei,tr,ba,au,th,cf,so] = await Promise.all([
     sb.from('players').select('*'),
